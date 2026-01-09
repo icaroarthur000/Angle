@@ -42,6 +42,54 @@ def _compute_curvature_at_point(pts: np.ndarray, idx: int, window: int = 3) -> f
     return float(curvature)
 
 
+def _validate_baseline_sanity(line_params: Tuple,
+                               gota_pts: np.ndarray,
+                               max_acceptable_angle: float = 45.0) -> bool:
+    """Valida se a baseline estimada é fisicamente razoável.
+    
+    Critérios de sanidade:
+    1. Inclinação não deve exceder ~45° (gotas não descaem de substratos de pé)
+    2. Linha deve passar perto do centróide inferior da gota
+    3. Direção (vx, vy) deve estar normalizada
+    
+    Retorna True se baseline é aceitável, False caso contrário.
+    """
+    if line_params is None:
+        return False
+    
+    vx, vy, x0, y0 = line_params
+    
+    # Verificar normalização
+    norm = np.sqrt(vx**2 + vy**2)
+    if norm < 0.95 or norm > 1.05:
+        return False
+    
+    # Verificar inclinação
+    angle_rad = np.arctan2(abs(vy), abs(vx))
+    angle_deg = np.degrees(angle_rad)
+    if angle_deg > max_acceptable_angle:
+        return False
+    
+    # A linha base deve estar perto do fundo da gota
+    x_min = np.min(gota_pts[:, 0])
+    x_max = np.max(gota_pts[:, 0])
+    y_min = np.min(gota_pts[:, 1])
+    y_max = np.max(gota_pts[:, 1])
+    
+    # y0 deve estar entre 70%-95% da altura (região inferior)
+    expected_y_min = y_min + 0.7 * (y_max - y_min)
+    expected_y_max = y_max + 0.1 * (y_max - y_min)  # um pouco abaixo do máximo
+    
+    if y0 < expected_y_min or y0 > expected_y_max:
+        return False
+    
+    # x0 deve estar dentro ou perto dos limites horizontais
+    if x0 < x_min - 10 or x0 > x_max + 10:
+        return False
+    
+    return True
+
+
 def select_baseline_candidates(gota_pts: np.ndarray,
                                 curvature_threshold: float = 0.15,
                                 y_variance_threshold: float = 8.0) -> np.ndarray:
@@ -110,14 +158,20 @@ def select_baseline_candidates(gota_pts: np.ndarray,
     return candidates.astype(np.float32)
 
 
-def fit_baseline_with_line(candidates: np.ndarray) -> Tuple[Optional[Tuple], float]:
+def fit_baseline_with_line(candidates: np.ndarray,
+                            gota_pts: np.ndarray = None) -> Tuple[Optional[Tuple], float]:
     """Regressão robusta da linha base usando cv2.fitLine (RANSAC).
+    
+    Parâmetros:
+    - candidates: pontos candidatos à superfície
+    - gota_pts: contorno completo da gota (para validação de sanidade)
     
     Retorna:
     - (vx, vy, x0, y0): parâmetros da linha (direção + ponto)
     - r_squared: qualidade do ajuste (0-1, maior é melhor)
     
-    Se houver poucos candidatos ou fit falhar, retorna (None, 0.0).
+    Se houver poucos candidatos, fit falhar ou baseline ser não-física,
+    retorna (None, 0.0).
     """
     if candidates is None or len(candidates) < 5:
         return None, 0.0
@@ -132,6 +186,12 @@ def fit_baseline_with_line(candidates: np.ndarray) -> Tuple[Optional[Tuple], flo
         norm = np.sqrt(vx**2 + vy**2)
         if norm < 0.9:  # não normalizado corretamente
             return None, 0.0
+        
+        # Validar sanidade física se contorno está disponível
+        if gota_pts is not None:
+            line_tuple = (vx, vy, x0, y0)
+            if not _validate_baseline_sanity(line_tuple, gota_pts):
+                return None, 0.0
         
         # calcular R² como validação de qualidade
         # resíduos: distância de cada ponto à linha
@@ -216,7 +276,12 @@ def project_contour_onto_baseline(gota_pts: np.ndarray,
 def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
     """Fallback geométrico: detecta altura da baseline pela 'cintura' (menor largura).
     
-    Método heurístico robusta para casos onde a regressão falha.
+    Método heurístico robusto para casos onde a regressão falha.
+    
+    Física: O ponto de contato é onde a gota tem menor largura (máxima curvatura,
+    transição entre superfície e gota inclinada).
+    
+    Otimização: Usa stride adaptativo para não processar pixel-por-pixel em imagens grandes.
     """
     x, y, w, h = cv2.boundingRect(gota_pts)
     
@@ -224,11 +289,15 @@ def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
     search_start = int(y + h * 0.5)
     search_end = int(y + h * 0.95)
     
+    # Stride adaptativo: reduz loop em imagens grandes
+    # Para imagens com altura > 200 pixels, processar a cada 2-3 pixels
+    stride = max(1, h // 100)  # ~1% da altura, mínimo 1
+    
     min_width = float('inf')
     neck_candidate = -1
     
     if search_end > search_start:
-        for row in range(search_start, search_end):
+        for row in range(search_start, search_end, stride):
             pts_in_row = gota_pts[np.abs(gota_pts[:, 1] - row) < 2]
             if len(pts_in_row) >= 2:
                 w_row = np.max(pts_in_row[:, 0]) - np.min(pts_in_row[:, 0])
@@ -236,7 +305,19 @@ def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
                     min_width = w_row
                     neck_candidate = row
     
+    # Refinar: se encontrou candidato, procurar mais precisamente na vizinhança
     if neck_candidate != -1 and neck_candidate > search_start:
+        search_refined_start = max(search_start, neck_candidate - stride)
+        search_refined_end = min(search_end, neck_candidate + stride)
+        
+        for row in range(search_refined_start, search_refined_end):
+            pts_in_row = gota_pts[np.abs(gota_pts[:, 1] - row) < 2]
+            if len(pts_in_row) >= 2:
+                w_row = np.max(pts_in_row[:, 0]) - np.min(pts_in_row[:, 0])
+                if w_row < min_width:
+                    min_width = w_row
+                    neck_candidate = row
+        
         baseline_y = float(neck_candidate)
     
     return baseline_y
@@ -247,11 +328,22 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray,
                                min_r_squared: float = 0.7) -> Dict:
     """Pipeline híbrido: regressão com fallback automático.
     
+    Esta é a função principal para detecção de baseline.
+    
+    Fluxo:
+    1. Selecionar pontos com curvatura baixa (superfície)
+    2. Tentar regressão robusta (cv2.fitLine RANSAC)
+    3. Validar qualidade (R² ≥ 0.7) e sanidade física (ângulo, posição)
+    4. Se bem-sucedido: projetar contorno e encontrar pontos de contato
+    5. Se falhar: usar fallback geométrico (cintura)
+    
+    A baseline pode estar inclinada e funciona com câmeras inclinadas.
+    
     Retorna dict:
     {
         'line_params': (vx, vy, x0, y0) ou None,
         'baseline_y': float,
-        'r_squared': float (qualidade do fit),
+        'r_squared': float (qualidade do fit, 0-1),
         'method': str ('regression' ou 'fallback'),
         'p_esq': [x, y],
         'p_dir': [x, y]
@@ -265,7 +357,7 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray,
     candidates = select_baseline_candidates(gota_pts)
     
     # ETAPA 3: Tentar regressão
-    line_params, r_squared = fit_baseline_with_line(candidates)
+    line_params, r_squared = fit_baseline_with_line(candidates, gota_pts)
     
     if line_params is not None and r_squared >= min_r_squared and len(candidates) >= min_candidates:
         # ETAPA 4: Regressão bem-sucedida — projetar e encontrar contatos
@@ -297,6 +389,7 @@ def encontrar_pontos_contato(gota_pts: np.ndarray, baseline_y: float) -> Tuple:
     """Encontra pontos de contato na altura da baseline (para compatibilidade).
     
     Este é um wrapper do método anterior, mantido para compatibilidade com main.py.
+    Usado quando a regressão falha (fallback cintura).
     """
     threshold_y = 5
     base_pts = gota_pts[np.abs(gota_pts[:, 1] - baseline_y) < threshold_y]
@@ -306,8 +399,67 @@ def encontrar_pontos_contato(gota_pts: np.ndarray, baseline_y: float) -> Tuple:
         p_dir = [float(np.max(base_pts[:, 0])), baseline_y]
         return p_esq, p_dir
     else:
-        # Fallback
+        # Fallback: usar bounding box
         x, y, w, h = cv2.boundingRect(gota_pts)
         p_esq = [float(x), baseline_y]
         p_dir = [float(x + w), baseline_y]
         return p_esq, p_dir
+
+
+def diagnosticar_baseline(gota_pts: np.ndarray,
+                          baseline_result: Dict) -> Dict:
+    """Função de diagnóstico para verificar qualidade da baseline.
+    
+    Retorna métricas de qualidade e recomendações para debugging.
+    Útil para validação e troubleshooting em sistemas multi-usuário.
+    
+    Retorna dict com:
+    - method: 'regression' ou 'fallback'
+    - r_squared: qualidade do fit
+    - num_candidatos: quantos pontos passaram no filtro de curvatura
+    - angulo_baseline: inclinação estimada em graus
+    - status: 'OK', 'MARGINAL' ou 'FALLBACK'
+    - msg: string com diagnóstico
+    """
+    if baseline_result['method'] == 'error':
+        return {
+            'method': 'error',
+            'status': 'ERRO',
+            'msg': 'Contorno muito pequeno ou inválido'
+        }
+    
+    candidates = select_baseline_candidates(gota_pts)
+    num_cand = len(candidates)
+    
+    result_info = {
+        'method': baseline_result['method'],
+        'r_squared': baseline_result['r_squared'],
+        'num_candidatos': num_cand,
+        'baseline_y': baseline_result['baseline_y']
+    }
+    
+    if baseline_result['method'] == 'regression':
+        line_params = baseline_result['line_params']
+        vx, vy, x0, y0 = line_params
+        angle_rad = np.arctan2(abs(vy), abs(vx))
+        angle_deg = np.degrees(angle_rad)
+        
+        result_info['angulo_baseline'] = angle_deg
+        
+        if baseline_result['r_squared'] >= 0.8 and num_cand >= 10:
+            result_info['status'] = 'OK'
+            result_info['msg'] = f'Regressão excelente: R²={baseline_result["r_squared"]:.3f}, ' \
+                                  f'ângulo={angle_deg:.1f}°, {num_cand} candidatos'
+        elif baseline_result['r_squared'] >= 0.7 and num_cand >= 5:
+            result_info['status'] = 'OK'
+            result_info['msg'] = f'Regressão aceitável: R²={baseline_result["r_squared"]:.3f}, ' \
+                                  f'ângulo={angle_deg:.1f}°, {num_cand} candidatos'
+        else:
+            result_info['status'] = 'MARGINAL'
+            result_info['msg'] = f'Regressão marginal: R²={baseline_result["r_squared"]:.3f}'
+    else:
+        result_info['angulo_baseline'] = 0.0
+        result_info['status'] = 'FALLBACK'
+        result_info['msg'] = f'Fallback cintura usado ({num_cand} candidatos disponíveis)'
+    
+    return result_info

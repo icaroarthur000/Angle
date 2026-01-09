@@ -10,7 +10,7 @@ from datetime import datetime
 try:
     from preprocess import preprocess_image_for_contact_angle, save_debug_imgs
     HAVE_PREPROCESS = True
-except Exception:
+except Exception: 
     HAVE_PREPROCESS = False
     def preprocess_image_for_contact_angle(img_bgr):
         # fallback: usa filtros.aplicar_pre_processamento que retorna (vis, bin)
@@ -379,11 +379,38 @@ class SelectionWindow(ctk.CTk):
         if cropped.size == 0:
             return
 
-        # === PRÉ-PROCESSAMENTO ROBUSTO ===
-        pre = preprocess_image_for_contact_angle(cropped)
-        # extrai binária e imagem para visualização
-        bin_img = pre.get("binary")
-        bgr_vis = pre.get("corrected_bgr", cropped)
+        # === PRÉ-PROCESSAMENTO: PRIORIZAR FILTROS.PY (OTSU SIMPLES E RÁPIDO) ===
+        try:
+            # Tenta usar filtros.py primeiro (método simples, robusto e rápido)
+            gray_vis, bin_img = filtros.aplicar_pre_processamento(cropped)
+            bgr_vis = cropped  # Usa imagem original para visualização
+            debug_imgs = None
+        except Exception as e:
+            # Fallback para preprocess.py se disponível
+            if HAVE_PREPROCESS:
+                try:
+                    pre = preprocess_image_for_contact_angle(cropped)
+                    bin_img = pre.get("binary")
+                    bgr_vis = pre.get("corrected_bgr", cropped)
+                    debug_imgs = pre.get("debug_imgs")
+                except Exception:
+                    # Última alternativa: grayscale + Otsu manual
+                    gray_vis = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+                    blur = cv2.GaussianBlur(gray_vis, (5, 5), 0)
+                    _, bin_img = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                    bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel, iterations=1)
+                    bgr_vis = cropped
+                    debug_imgs = None
+            else:
+                # Última alternativa: grayscale + Otsu manual
+                gray_vis = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+                blur = cv2.GaussianBlur(gray_vis, (5, 5), 0)
+                _, bin_img = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel, iterations=1)
+                bgr_vis = cropped
+                debug_imgs = None
 
         # sanity checks
         if bin_img is None:
@@ -401,7 +428,7 @@ class SelectionWindow(ctk.CTk):
         self.withdraw()
 
         # Abrir janela de análise passando imagem BGR (vis) e BIN (processamento)
-        new_win = ContactAngleApp(bgr_vis, bin_img, master=self, debug_imgs=pre.get("debug_imgs"))
+        new_win = ContactAngleApp(bgr_vis, bin_img, master=self, debug_imgs=debug_imgs)
         new_win.lift()
 
     def _on_close(self):

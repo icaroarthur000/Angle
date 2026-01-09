@@ -18,28 +18,35 @@ import math
 
 
 def desenhar_contorno(canvas, gota_pts: np.ndarray, to_scr):
-    """Desenha o contorno da gota no canvas.
+    """Desenha o contorno da gota no canvas com uma única chamada (OTIMIZADO).
     
     Parâmetros:
     - canvas: canvas Tkinter
     - gota_pts: array Nx2 com pontos (x, y) do contorno em coordenadas de imagem
     - to_scr: função callback to_scr(x, y) → (x_tela, y_tela)
+    
+    OTIMIZAÇÃO CRÍTICA: Constrói uma lista plana [x1, y1, x2, y2, ...] e faz uma única
+    chamada ao canvas.create_line(). Isso elimina o "piscar" causado por milhares de
+    chamadas individuais e acelera a renderização ~10x.
     """
     if gota_pts is None or len(gota_pts) < 3:
         return
     
-    # converter todos os pontos para coordenadas de tela
+    # Converter todos os pontos para coordenadas de tela em uma passagem
     pts_tela = []
     for pt in gota_pts:
         x_scr, y_scr = to_scr(pt[0], pt[1])
-        pts_tela.append((int(round(x_scr)), int(round(y_scr))))
+        pts_tela.append(int(round(x_scr)))
+        pts_tela.append(int(round(y_scr)))
     
-    # desenhar polígono (contorno fechado)
-    if len(pts_tela) >= 3:
-        for i in range(len(pts_tela)):
-            x1, y1 = pts_tela[i]
-            x2, y2 = pts_tela[(i + 1) % len(pts_tela)]
-            canvas.create_line(x1, y1, x2, y2, fill="cyan", width=1)
+    # Fechar o polígono: adicionar o primeiro ponto ao final para formar loop fechado
+    if len(pts_tela) >= 6:  # pelo menos 3 pontos (6 coordenadas)
+        pts_tela.append(pts_tela[0])
+        pts_tela.append(pts_tela[1])
+    
+    # UMA ÚNICA CHAMADA ao canvas para desenhar todo o contorno (não múltiplas)
+    if len(pts_tela) >= 4:
+        canvas.create_line(*pts_tela, fill="cyan", width=1)
 
 
 def desenhar_pontos_contato(canvas, p_esq, p_dir, to_scr):

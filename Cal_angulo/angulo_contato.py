@@ -1,11 +1,34 @@
+from typing import Union
 import numpy as np
 import math
 
-def calcular_angulo_polinomial(gota_pts, p_esq, p_dir, baseline_y, lado):
+def calcular_angulo_polinomial(
+    gota_pts: np.ndarray,
+    p_esq: Union[list, tuple],
+    p_dir: Union[list, tuple],
+    baseline_y: float,
+    lado: str
+) -> float:
     """
     Calcula o ângulo de contato usando ajuste polinomial de 2ª ordem.
-    lado: "esq" ou "dir"
+    
+    Args:
+        gota_pts: Array Nx2 com pontos do contorno (x, y)
+        p_esq: Ponto de contato esquerdo [x, y]
+        p_dir: Ponto de contato direito [x, y]
+        baseline_y: Altura da linha base em pixels
+        lado: "esq" para esquerdo, "dir" para direito
+    
+    Returns:
+        Ângulo de contato em graus (0.0-180.0) ou 0.0 se inválido
     """
+    # Validar entradas
+    if gota_pts is None or len(gota_pts) < 5:
+        return 0.0
+    if p_esq is None or p_dir is None:
+        return 0.0
+    if lado not in ("esq", "dir"):
+        return 0.0
     # Janela de análise (pontos acima da baseline)
     window_height = 50
     mask = (gota_pts[:, 1] < baseline_y) & \
@@ -13,7 +36,8 @@ def calcular_angulo_polinomial(gota_pts, p_esq, p_dir, baseline_y, lado):
 
     local_pts = gota_pts[mask]
     
-    if len(local_pts) < 5: return 0.0
+    if len(local_pts) < 5:
+        return 0.0
 
     center_x = (p_esq[0] + p_dir[0]) / 2
     
@@ -23,12 +47,18 @@ def calcular_angulo_polinomial(gota_pts, p_esq, p_dir, baseline_y, lado):
     else:
         local_pts = local_pts[local_pts[:, 0] > center_x]
 
-    if len(local_pts) < 5: return 0.0
+    if len(local_pts) < 3:
+        return 0.0
 
     try:
         # Ajuste Polinomial: x = ay^2 + by + c (invertido para melhor ajuste vertical)
         ys = local_pts[:, 1]
         xs = local_pts[:, 0]
+        
+        # Verificar se há variação suficiente nos dados
+        if np.std(ys) < 1e-6 or np.std(xs) < 1e-6:
+            return 0.0
+        
         coeffs = np.polyfit(ys, xs, 2)
         a, b, c = coeffs
 

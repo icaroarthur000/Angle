@@ -14,7 +14,6 @@ coordenadas de imagem para tela, garantindo coerência de zoom/pan.
 
 import cv2
 import numpy as np
-import math
 
 
 def desenhar_contorno(canvas, gota_pts: np.ndarray, to_scr):

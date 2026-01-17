@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 # tenta importar módulo de pré-processamento robusto; fallback para filtros se faltar
 try:
-    from preprocess import preprocess_image_for_contact_angle, save_debug_imgs
+    from processamento_imagem.preprocess import preprocess_image_for_contact_angle, save_debug_imgs
     HAVE_PREPROCESS = True
 except Exception: 
     HAVE_PREPROCESS = False

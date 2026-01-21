@@ -1,5 +1,5 @@
 import cv2
-import numpy as np
+import numpy as np  
 import math
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -14,7 +14,7 @@ except Exception:
     HAVE_PREPROCESS = False
     def preprocess_image_for_contact_angle(img_bgr):
         # fallback: usa filtros.aplicar_pre_processamento que retorna (vis, bin)
-        try:
+        try: 
             res = filtros.aplicar_pre_processamento(img_bgr)
             if isinstance(res, dict):
                 # suporta dicionário retornado
@@ -536,23 +536,30 @@ class ContactAngleApp(ctk.CTkToplevel):
 
     # ---------------- ANÁLISE ----------------
     def initial_analysis(self):
-        # usa a binária já fornecida pelo pré-processamento (não recalcula)
+        # 1. Encontra o contorno (agora mais preciso)
         self.gota_pts = contorno.encontrar_contorno_gota(self.bin_image)
         if self.gota_pts is None:
             return
 
-        # usa pipeline híbrido: regressão com fallback automático
+        # 2. Chama o novo pipeline híbrido
         baseline_result = linha_base.detectar_baseline_hibrida(self.gota_pts)
-        self.baseline_y = baseline_result['baseline_y']
-        self.baseline_line_params = baseline_result['line_params']
-        self.baseline_method = baseline_result['method']
-        self.p_esq = baseline_result['p_esq']
-        self.p_dir = baseline_result['p_dir']
         
+        # 3. Extrai os dados (O segredo está em usar o que vem do dicionário)
+        self.baseline_y = baseline_result['baseline_y']
+        self.baseline_line_params = baseline_result.get('line_params')
+        self.baseline_method = baseline_result['method']
+        
+        # Aqui garantimos a prioridade científica
+        self.p_esq = baseline_result.get('p_esq')
+        self.p_dir = baseline_result.get('p_dir')
+        self.contact_method = baseline_result.get('contact_method')
+
+        # Fallback explícito: se a transição falhar, usa a geometria fixa
         if self.p_esq is None or self.p_dir is None:
             self.p_esq, self.p_dir = linha_base.encontrar_pontos_contato(
                 self.gota_pts, self.baseline_y
             )
+            self.contact_method = "fallback_estatistico"
         
         self.calculate()
 

@@ -533,34 +533,44 @@ class ContactAngleApp(ctk.CTkToplevel):
         v = ctk.CTkLabel(f, text="0.00°", font=("Arial", 26, "bold"))
         v.pack()
         return v
-
     # ---------------- ANÁLISE ----------------
     def initial_analysis(self):
-        # 1. Encontra o contorno (agora mais preciso)
+        """
+        Realiza a análise inicial seguindo a hierarquia científica:
+        Prioridade 1: Transição Física (Joelhos da gota)
+        Prioridade 2: Fallback Estatístico (apenas se a física falhar)
+        """
+        # 1. Obtém o contorno da gota através do módulo especializado
         self.gota_pts = contorno.encontrar_contorno_gota(self.bin_image)
         if self.gota_pts is None:
+            messagebox.showerror("Erro", "Não foi possível detectar a silhueta da gota.")
             return
 
-        # 2. Chama o novo pipeline híbrido
-        baseline_result = linha_base.detectar_baseline_hibrida(self.gota_pts)
+        # 2. Executa o pipeline híbrido (Apenas UMA vez)
+        res = linha_base.detectar_baseline_hibrida(self.gota_pts)
         
-        # 3. Extrai os dados (O segredo está em usar o que vem do dicionário)
-        self.baseline_y = baseline_result['baseline_y']
-        self.baseline_line_params = baseline_result.get('line_params')
-        self.baseline_method = baseline_result['method']
+        # 3. Extrai os parâmetros fundamentais da baseline
+        self.baseline_y = res['baseline_y']
+        self.baseline_line_params = res.get('line_params')
+        self.baseline_method = res.get('method')
         
-        # Aqui garantimos a prioridade científica
-        self.p_esq = baseline_result.get('p_esq')
-        self.p_dir = baseline_result.get('p_dir')
-        self.contact_method = baseline_result.get('contact_method')
+        # 4. Define os pontos de contato (Prioriza o que veio da Transição)
+        self.p_esq = res.get('p_esq')
+        self.p_dir = res.get('p_dir')
+        self.contact_method = res.get('contact_method')
 
-        # Fallback explícito: se a transição falhar, usa a geometria fixa
+        # 5. Fallback explícito: Segurança científica caso o contorno esteja muito ruidoso
         if self.p_esq is None or self.p_dir is None:
+            print("[AVISO]: Transição física falhou. Aplicando Fallback de Geometria Fixa.")
             self.p_esq, self.p_dir = linha_base.encontrar_pontos_contato(
                 self.gota_pts, self.baseline_y
             )
             self.contact_method = "fallback_estatistico"
         
+        # 6. Registra no console para fins de auditoria científica
+        print(f"Análise Concluída via: {self.contact_method}")
+        
+        # 7. Dispara os cálculos matemáticos finais e a renderização
         self.calculate()
 
     def update_contact_points(self):

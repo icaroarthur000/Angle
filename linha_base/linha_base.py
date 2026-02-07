@@ -7,7 +7,7 @@ from typing import Tuple, Optional, Dict, List
 # Defaults and tunable constants
 DEFAULT_WINDOW = 9
 DEFAULT_ERR_THRESH = 1.2
-DEFAULT_Y_FRAC = 0.6
+DEFAULT_Y_FRAC = 0.4
 MIN_VALID_IDXS = 20
 EPS_NORMALIZE = 1e-8
 
@@ -126,6 +126,12 @@ def find_contact_points_by_transition(
     y_min, y_max = np.min(contour[:, 1]), np.max(contour[:, 1])
     y_lim = y_min + y_frac * (y_max - y_min)
     valid_idxs = np.where(contour[:, 1] >= y_lim)[0]
+    # Defensive: ignore only a few bottom-most image rows to avoid discarding
+    # valid base if the crop is tight against the droplet edge.
+    bottom_ignore_px = 1
+    if len(valid_idxs) > 0:
+        keep_mask = contour[valid_idxs, 1] <= (y_max - bottom_ignore_px)
+        valid_idxs = valid_idxs[keep_mask]
     if len(valid_idxs) < min_valid_idxs:
         warnings.warn(f"find_contact_points_by_transition: too few valid bottom points ({len(valid_idxs)}); returning (None, None)")
         return None, None
@@ -170,7 +176,8 @@ def find_contact_points_by_transition(
         # Weights for the scalar score (choose deterministic, tunable constants)
         w_err = 1.0
         w_vert = 1.0
-        w_curv = 2.0
+        # Prioritize curvature to prefer the last curved point before flat substrate
+        w_curv = 3.0
 
         min_points_in_window = 5
         very_large_score = 1e6
@@ -286,7 +293,8 @@ def find_contact_points_by_transition(
             plane_thresh = float(np.percentile(scores, 25))
 
         # Minimum length of a flat run to be considered a valid substrate region
-        min_flat_len = max(2, window // 3)
+        # Require at least 3 consecutive flat windows to reduce sensitivity to noise
+        min_flat_len = max(3, window // 3)
 
 
         # left side: scan from center_pos-1 down to 0
@@ -426,8 +434,22 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
     # Se tudo falhar, usa o Fallback (Segurança)
     y_fallback = detectar_baseline_cintura(gota_pts)
     p_esq, p_dir = encontrar_pontos_contato(gota_pts, y_fallback)
+    # If we have both contacts from the fallback, synthesize a line_params
+    if p_esq is not None and p_dir is not None:
+        dx = p_dir[0] - p_esq[0]
+        dy = p_dir[1] - p_esq[1]
+        vx, vy = safe_normalize(dx, dy)
+        # Use o centro horizontal da gota (mais estável que a média dos contatos)
+        try:
+            x0 = float(np.mean(gota_pts[:, 0]))
+        except Exception:
+            x0 = (p_esq[0] + p_dir[0]) / 2.0
+        y0 = (p_esq[1] + p_dir[1]) / 2.0
+        lp = (float(vx), float(vy), float(x0), float(y0))
+    else:
+        lp = None
     return {
-        'line_params': None, 'baseline_y': y_fallback,
+        'line_params': lp, 'baseline_y': y_fallback,
         'method': 'fallback_cintura', 'contact_method': 'cintura_fallback',
         'p_esq': _norm_pt(p_esq), 'p_dir': _norm_pt(p_dir)
     }
@@ -438,14 +460,36 @@ def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
     pts = gota_pts.astype(np.int32)
     x, y, w, h = cv2.boundingRect(pts)
     min_width = float('inf')
-    y_res = float(y + h)
-    for row in range(int(y + h * 0.6), int(y + h * 0.98), max(1, h//100)):
+    # Start at 85% of height to stay well away from noisy bottom
+    y_res = float(y + h * 0.85)
+    # Search for the droplet "neck" (minimum width region) between 70-85% of height
+    # This region typically marks the transition from curved body to substrate
+    row_start = int(y + h * 0.70)
+    row_end = int(y + h * 0.85)
+    step = max(1, h // 100)
+    for row in range(row_start, row_end, step):
         row_pts = gota_pts[np.abs(gota_pts[:, 1] - row) < 2]
         if len(row_pts) >= 2:
             width = np.max(row_pts[:, 0]) - np.min(row_pts[:, 0])
             if width < min_width:
                 min_width = width
                 y_res = float(row)
+
+    # If our found baseline is too close to the image bottom, recompute using
+    # the lowest contour points while explicitly excluding the last few rows
+    # which often belong to the background/frame.
+    bottom_ignore_px = 1
+    y_bottom = float(y + h)
+    if y_res >= (y_bottom - bottom_ignore_px):
+        # select candidate points that are below the bulk but above the ignored rows
+        candidates = gota_pts[gota_pts[:, 1] <= (y_bottom - bottom_ignore_px)]
+        if len(candidates) >= 2:
+            # take a high percentile of these to approximate the lowest meaningful row
+            y_res = float(np.percentile(candidates[:, 1], 95))
+        else:
+            # fallback: use 85% height, not the extreme bottom pixel
+            y_res = float(y + h * 0.85)
+
     return y_res
 
 def encontrar_pontos_contato(gota_pts: np.ndarray, baseline_y: float) -> Tuple:

@@ -491,8 +491,11 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.gota_pts = None
 
         self.baseline_y = 0
+        self.baseline_line_params = None
+        self.baseline_method = None
         self.p_esq = None
         self.p_dir = None
+        self.contact_method = None
 
         self.zoom_scale = 1.0
         self.pan_offset_x = 0
@@ -574,7 +577,12 @@ class ContactAngleApp(ctk.CTkToplevel):
                 dx = self.p_dir[0] - self.p_esq[0]
                 dy = self.p_dir[1] - self.p_esq[1]
                 vx, vy = linha_base.safe_normalize(dx, dy)
-                x0, y0 = (self.p_esq[0] + self.p_dir[0]) / 2.0, (self.p_esq[1] + self.p_dir[1]) / 2.0
+                # Use center horizontal of the droplet for x0 to avoid lateral offset
+                try:
+                    x0 = float(np.mean(self.gota_pts[:, 0]))
+                except Exception:
+                    x0 = (self.p_esq[0] + self.p_dir[0]) / 2.0
+                y0 = (self.p_esq[1] + self.p_dir[1]) / 2.0
                 self.baseline_line_params = (float(vx), float(vy), float(x0), float(y0))
                 self.baseline_y = y0
                 self.baseline_method = 'fallback_estatistico'        
@@ -595,7 +603,12 @@ class ContactAngleApp(ctk.CTkToplevel):
                 dx = self.p_dir[0] - self.p_esq[0]
                 dy = self.p_dir[1] - self.p_esq[1]
                 vx, vy = linha_base.safe_normalize(dx, dy)
-                x0, y0 = (self.p_esq[0] + self.p_dir[0]) / 2.0, (self.p_esq[1] + self.p_dir[1]) / 2.0
+                # Use center horizontal of the droplet for x0 to avoid lateral offset
+                try:
+                    x0 = float(np.mean(self.gota_pts[:, 0]))
+                except Exception:
+                    x0 = (self.p_esq[0] + self.p_dir[0]) / 2.0
+                y0 = (self.p_esq[1] + self.p_dir[1]) / 2.0
                 self.baseline_line_params = (float(vx), float(vy), float(x0), float(y0))
                 self.baseline_y = y0
                 self.baseline_method = 'fallback_estatistico'

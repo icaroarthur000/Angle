@@ -559,6 +559,9 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.p_dir = res.get('p_dir')
         self.contact_method = res.get('contact_method')
 
+        # DEBUG: ajuda a identificar se os pontos foram detectados corretamente
+        print(f"DEBUG: p_esq={self.p_esq}, p_dir={self.p_dir}, line_params={self.baseline_line_params}, method={self.baseline_method}")
+
         # 5. Fallback explícito: Segurança científica caso o contorno esteja muito ruidoso
         if self.p_esq is None or self.p_dir is None:
             print("[AVISO]: Transição física falhou. Aplicando Fallback de Geometria Fixa.")
@@ -566,7 +569,15 @@ class ContactAngleApp(ctk.CTkToplevel):
                 self.gota_pts, self.baseline_y
             )
             self.contact_method = "fallback_estatistico"
-        
+            # Recompute line parameters from fallback contacts so drawing matches points
+            if self.p_esq is not None and self.p_dir is not None:
+                dx = self.p_dir[0] - self.p_esq[0]
+                dy = self.p_dir[1] - self.p_esq[1]
+                vx, vy = linha_base.safe_normalize(dx, dy)
+                x0, y0 = (self.p_esq[0] + self.p_dir[0]) / 2.0, (self.p_esq[1] + self.p_dir[1]) / 2.0
+                self.baseline_line_params = (float(vx), float(vy), float(x0), float(y0))
+                self.baseline_y = y0
+                self.baseline_method = 'fallback_estatistico'        
         # 6. Registra no console para fins de auditoria científica
         print(f"Análise Concluída via: {self.contact_method}")
         
@@ -579,6 +590,15 @@ class ContactAngleApp(ctk.CTkToplevel):
             self.p_esq, self.p_dir = linha_base.encontrar_pontos_contato(
                 self.gota_pts, self.baseline_y
             )
+            # Recompute baseline line_params to keep rendering consistent
+            if self.p_esq is not None and self.p_dir is not None:
+                dx = self.p_dir[0] - self.p_esq[0]
+                dy = self.p_dir[1] - self.p_esq[1]
+                vx, vy = linha_base.safe_normalize(dx, dy)
+                x0, y0 = (self.p_esq[0] + self.p_dir[0]) / 2.0, (self.p_esq[1] + self.p_dir[1]) / 2.0
+                self.baseline_line_params = (float(vx), float(vy), float(x0), float(y0))
+                self.baseline_y = y0
+                self.baseline_method = 'fallback_estatistico'
         self.calculate()
 
     def calculate(self):
@@ -657,7 +677,7 @@ class ContactAngleApp(ctk.CTkToplevel):
                 self.ratio,
                 ox,  # offset_x (novo parâmetro)
                 oy,  # offset_y
-                image_width=nw,  # largura da imagem escalada
+                image_width=iw,  # largura da imagem (coordenadas de imagem)
                 line_params=line_params  # parâmetros de regressão (se houver)
             )
 

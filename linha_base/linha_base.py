@@ -113,6 +113,12 @@ def find_contact_points_by_transition(
     def _as_point(p):
         return None if p is None else [float(p[0]), float(p[1])]
 
+    def _norm_pt(p):
+        """Ensure a point is a float list or None for stable downstream usage."""
+        if p is None:
+            return None
+        return [float(p[0]), float(p[1])]
+
     # 3.1 Ensure contour ordered and float
     contour = ensure_ordered_contour(gota_pts).astype(float)
 
@@ -362,6 +368,12 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
     2. Acha os pontos de contato reais (Transição).
     3. Redefine a altura da linha base para os contatos reais (Precisão Científica).
     """
+    def _norm_pt(p):
+        """Ensure a point is a float list or None."""
+        if p is None:
+            return None
+        return [float(p[0]), float(p[1])]
+
     if len(gota_pts) < 10: return {'method': 'error', 'p_esq': None, 'p_dir': None}
 
     # NOTE: avoid double-ordering: `find_contact_points_by_transition` will
@@ -379,7 +391,7 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
             'baseline_y': y0,
             'method': 'deterministic_transition',
             'contact_method': 'geometric_transition',
-            'p_esq': p_esq, 'p_dir': p_dir,
+            'p_esq': _norm_pt(p_esq), 'p_dir': _norm_pt(p_dir),
             'r_squared': 1.0
         }
 
@@ -407,7 +419,7 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
                 'baseline_y': baseline_y,
                 'method': 'tls_transition',
                 'contact_method': 'geometric_transition',
-                'p_esq': p_esq, 'p_dir': p_dir,
+                'p_esq': _norm_pt(p_esq), 'p_dir': _norm_pt(p_dir),
                 'r_squared': r_squared
             }
 
@@ -417,7 +429,7 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
     return {
         'line_params': None, 'baseline_y': y_fallback,
         'method': 'fallback_cintura', 'contact_method': 'cintura_fallback',
-        'p_esq': p_esq, 'p_dir': p_dir
+        'p_esq': _norm_pt(p_esq), 'p_dir': _norm_pt(p_dir)
     }
 
 def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:

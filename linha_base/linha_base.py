@@ -467,21 +467,39 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
     }
 
 def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
-    """Procura a menor largura na base. Útil quando o substrato está invisível."""
-    # OpenCV expects CV_32F or CV_32S for point sets; cast to int32 for robustness
+    """
+    Procura a baseline na região de transição gota-superfície.
+    CORREÇÃO: Busca na região de 85-98% da altura (não até 100%).
+    """
     pts = gota_pts.astype(np.int32)
     x, y, w, h = cv2.boundingRect(pts)
-    # When contour is correct, the safest fallback is to use the lowest
-    # meaningful contour band (near max y), not a mid-height "neck".
-    bottom_ignore_px = 1
-    y_bottom = float(y + h)
-    candidates = gota_pts[gota_pts[:, 1] <= (y_bottom - bottom_ignore_px)]
-    if len(candidates) >= 2:
-        # Use a very high percentile to stay near the base without hitting noise
-        return float(np.percentile(candidates[:, 1], 99))
+    
+    # CORREÇÃO CRÍTICA: Buscar apenas na região SUPERIOR à base
+    min_width = float('inf')
+    y_res = float(y + h * 0.90)  # Valor padrão mais razoável
+    
+    # Buscar entre 85% e 98% (NÃO até 100%)
+    row_start = int(y + h * 0.85)
+    row_end = int(y + h * 0.98)  # Para ANTES do fim
+    step = max(1, h // 100)
+    
+    for row in range(row_start, row_end, step):
+        row_pts = gota_pts[np.abs(gota_pts[:, 1] - row) < 2]
+        if len(row_pts) >= 2:
+            width = np.max(row_pts[:, 0]) - np.min(row_pts[:, 0])
+            if width < min_width:
+                min_width = width
+                y_res = float(row)
 
-    # Last resort: return just above the bottom of the bounding box
-    return float(y_bottom - bottom_ignore_px)
+    # Validação: se o resultado está muito próximo do fim, ajustar
+    y_max_gota = np.max(gota_pts[:, 1])
+    
+    # Se a baseline calculada está acima de onde a gota realmente termina
+    if y_res < y_max_gota * 0.85:
+        # Usar o ponto mais baixo da gota como referência
+        y_res = float(np.percentile(gota_pts[:, 1], 90))
+    
+    return y_res
 
 def encontrar_pontos_contato(gota_pts: np.ndarray, baseline_y: float) -> Tuple:
     """Apenas localiza os extremos horizontais em uma altura Y fixa."""

@@ -28,8 +28,31 @@ def encontrar_contorno_gota(imagem_binaria):
     if not conts:
         return None
 
-    # Passo 3: Selecionar o maior contorno (assume-se que a gota é o objeto principal)
-    c = max(conts, key=cv2.contourArea)
+    # NOVO: Filtrar contornos que tocam as bordas da imagem
+    h, w = img.shape[:2]
+    margin = 5  # pixels de margem para considerar "tocando a borda"
+    valid_contours = []
+
+    for c in conts:
+        pts = c.reshape(-1, 2)
+        
+        # Verificar se o contorno toca as bordas
+        touches_left = np.any(pts[:, 0] <= margin)
+        touches_right = np.any(pts[:, 0] >= w - margin)
+        touches_top = np.any(pts[:, 1] <= margin)
+        touches_bottom = np.any(pts[:, 1] >= h - margin)
+        
+        # Se tocar 3 ou mais bordas, provavelmente é a borda da imagem
+        border_count = sum([touches_left, touches_right, touches_top, touches_bottom])
+        
+        if border_count < 3:  # Aceitar apenas se tocar menos de 3 bordas
+            valid_contours.append(c)
+
+    if not valid_contours:
+        return None
+
+    # Passo 3: Selecionar o maior contorno válido
+    c = max(valid_contours, key=cv2.contourArea)
 
     # Passo 4: Limpeza de ruído (opcional)
     # Se o contorno for muito pequeno (ex: ruído de poeira), ignora.

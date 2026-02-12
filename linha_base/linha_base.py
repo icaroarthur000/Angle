@@ -476,7 +476,8 @@ def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
     
     # CORREÇÃO CRÍTICA: Buscar apenas na região SUPERIOR à base
     min_width = float('inf')
-    y_res = float(y + h * 0.90)  # Valor padrão mais razoável
+    # Valor padrão: 90% da altura do bbox (usado se nenhuma cintura for encontrada no loop)
+    y_res = float(y + h * 0.90)
     
     # Buscar entre 85% e 98% (NÃO até 100%)
     row_start = int(y + h * 0.85)
@@ -491,12 +492,13 @@ def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
                 min_width = width
                 y_res = float(row)
 
-    # Validação: se o resultado está muito próximo do fim, ajustar
+    # Validação: se o resultado está muito longe da base real, ajustar
     y_max_gota = np.max(gota_pts[:, 1])
     
-    # Se a baseline calculada está acima de onde a gota realmente termina
-    if y_res < y_max_gota * 0.85:
-        # Usar o ponto mais baixo da gota como referência
+    # Se a baseline está muito acima (y menor) da base real da gota (detectou cintura no meio)
+    # Isso acontece quando y_res está em menos de 85% da distância até o fundo
+    if y_res < (y + h * 0.85):
+        # Usar o percentil 90 dos pontos Y (perto da base mas não no extremo)
         y_res = float(np.percentile(gota_pts[:, 1], 90))
     
     return y_res

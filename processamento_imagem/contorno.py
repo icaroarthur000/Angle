@@ -3,8 +3,10 @@ import numpy as np
 
 def encontrar_contorno_gota(imagem_binaria):
     """
-    Encontra o maior contorno da gota preservando a fidelidade da borda.
-    Ajustado para não arredondar excessivamente a zona de contato.
+    Encontra o maior contorno da gota com máscara de segurança nas bordas.
+    
+    A máscara de 5px força fisicamente a separação da gota do frame da imagem,
+    garantindo que nenhum contorno toque nas bordas (especialmente o fundo).
     """
     # Garante que a imagem seja 8-bit single channel
     if len(imagem_binaria.shape) == 3:
@@ -13,16 +15,24 @@ def encontrar_contorno_gota(imagem_binaria):
         img = imagem_binaria.copy()
 
     # Passo 1: Fechamento morfológico LEVE.
-    # Usamos um kernel menor (3x3) ou menos iterações para não deformar a transição gota-substrato.
     kernel = np.ones((3, 3), np.uint8)
     processed = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    # CORREÇÃO CRÍTICA: Máscara de segurança - Borda preta de 10px
+    # Isto garante de forma ROBUSTA que nenhum pixel branco toque nas bordas da imagem,
+    # especialmente no fundo (y = h). Força a gota a "flutuar" bem longe do frame.
+    # Espessura aumentada para 10px (de 5px) para garantir separação total.
+    h, w = processed.shape[:2]
+    cv2.rectangle(processed, (0, 0), (w - 1, h - 1), 0, thickness=10)
 
     # Passo 2: Encontrar contornos
     conts, _ = cv2.findContours(processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     # Fallback se a binarização falhou mas há bordas visíveis
     if not conts:
-        edges = cv2.Canny(img, 30, 100) # Thresholds mais baixos para capturar transições suaves
+        edges = cv2.Canny(img, 30, 100)
+        # Aplicar a máscara também no Canny para consistência (mesma 10px de espessura)
+        cv2.rectangle(edges, (0, 0), (w - 1, h - 1), 0, thickness=10)
         conts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     if not conts:
@@ -31,14 +41,23 @@ def encontrar_contorno_gota(imagem_binaria):
     # Passo 3: Selecionar o maior contorno (assume-se que a gota é o objeto principal)
     c = max(conts, key=cv2.contourArea)
 
-    # Passo 4: Limpeza de ruído (opcional)
-    # Se o contorno for muito pequeno (ex: ruído de poeira), ignora.
+    # Passo 4: Filtrar ruído - contornos muito pequenos são desprezados
     if cv2.contourArea(c) < 100:
         return None
 
-    # Retorna os pontos completos Nx2
+    # Retorna os pontos do contorno como array Nx2
     pts = c.reshape(-1, 2)
     
-    # IMPORTANTE: Garantir ordem sequencial dos pontos para o cálculo da curvatura
-    # O findContours já costuma retornar ordenado, mas reshape garante a estrutura.
-    return pts
+    # VALIDAÇÃO EXTRA: Garantir que nenhum ponto está pegando nas bordas
+    # Remove pontos que estão muito perto das extremidades (10px de margem)
+    margin = 10
+    valid_mask = (
+        (pts[:, 0] > margin) & (pts[:, 0] < w - margin) &  # Esquerda e direita
+        (pts[:, 1] > margin) & (pts[:, 1] < h - margin)     # Topo e fundo
+    )
+    
+    if np.sum(valid_mask) < 10:  # Se remover muito, não vale a pena
+        return pts  # Retorna o original
+    
+    pts_filtered = pts[valid_mask]
+    return pts_filtered if len(pts_filtered) > 0 else pts

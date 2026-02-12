@@ -387,6 +387,18 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
     # NOTE: avoid double-ordering: `find_contact_points_by_transition` will
     # call `ensure_ordered_contour` internally for safety when needed.
 
+    # Estratégia direta: usar a faixa inferior do contorno para garantir baseline na base
+    base_y, base_p_esq, base_p_dir = encontrar_pontos_contato_base(gota_pts)
+    if base_p_esq is not None and base_p_dir is not None:
+        return {
+            'line_params': None,
+            'baseline_y': base_y,
+            'method': 'contour_base',
+            'contact_method': 'contour_base',
+            'p_esq': _norm_pt(base_p_esq), 'p_dir': _norm_pt(base_p_dir),
+            'r_squared': 1.0
+        }
+
     # Primeiro tente uma estratégia determinística baseada apenas nos contatos
     p_esq, p_dir = find_contact_points_by_transition(gota_pts)
     if p_esq and p_dir:
@@ -459,38 +471,17 @@ def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
     # OpenCV expects CV_32F or CV_32S for point sets; cast to int32 for robustness
     pts = gota_pts.astype(np.int32)
     x, y, w, h = cv2.boundingRect(pts)
-    min_width = float('inf')
-    # Start at 85% of height to stay well away from noisy bottom
-    y_res = float(y + h * 0.85)
-    # Search for the droplet "neck" (minimum width region) between 70-85% of height
-    # This region typically marks the transition from curved body to substrate
-    row_start = int(y + h * 0.70)
-    row_end = int(y + h * 0.85)
-    step = max(1, h // 100)
-    for row in range(row_start, row_end, step):
-        row_pts = gota_pts[np.abs(gota_pts[:, 1] - row) < 2]
-        if len(row_pts) >= 2:
-            width = np.max(row_pts[:, 0]) - np.min(row_pts[:, 0])
-            if width < min_width:
-                min_width = width
-                y_res = float(row)
-
-    # If our found baseline is too close to the image bottom, recompute using
-    # the lowest contour points while explicitly excluding the last few rows
-    # which often belong to the background/frame.
+    # When contour is correct, the safest fallback is to use the lowest
+    # meaningful contour band (near max y), not a mid-height "neck".
     bottom_ignore_px = 1
     y_bottom = float(y + h)
-    if y_res >= (y_bottom - bottom_ignore_px):
-        # select candidate points that are below the bulk but above the ignored rows
-        candidates = gota_pts[gota_pts[:, 1] <= (y_bottom - bottom_ignore_px)]
-        if len(candidates) >= 2:
-            # take a high percentile of these to approximate the lowest meaningful row
-            y_res = float(np.percentile(candidates[:, 1], 95))
-        else:
-            # fallback: use 85% height, not the extreme bottom pixel
-            y_res = float(y + h * 0.85)
+    candidates = gota_pts[gota_pts[:, 1] <= (y_bottom - bottom_ignore_px)]
+    if len(candidates) >= 2:
+        # Use a very high percentile to stay near the base without hitting noise
+        return float(np.percentile(candidates[:, 1], 99))
 
-    return y_res
+    # Last resort: return just above the bottom of the bounding box
+    return float(y_bottom - bottom_ignore_px)
 
 def encontrar_pontos_contato(gota_pts: np.ndarray, baseline_y: float) -> Tuple:
     """Apenas localiza os extremos horizontais em uma altura Y fixa."""
@@ -500,6 +491,24 @@ def encontrar_pontos_contato(gota_pts: np.ndarray, baseline_y: float) -> Tuple:
     pts = gota_pts.astype(np.int32)
     x, y, w, h = cv2.boundingRect(pts)
     return [float(x), baseline_y], [float(x + w), baseline_y]
+
+
+def encontrar_pontos_contato_base(gota_pts: np.ndarray, band_px: int = 2) -> Tuple[float, List[float], List[float]]:
+    """Retorna baseline_y e extremos esquerdo/direito na faixa inferior do contorno."""
+    if gota_pts is None or len(gota_pts) == 0:
+        return 0.0, None, None
+    y_max = float(np.max(gota_pts[:, 1]))
+    band_pts = gota_pts[gota_pts[:, 1] >= (y_max - band_px)]
+    if len(band_pts) >= 2:
+        baseline_y = float(np.mean(band_pts[:, 1]))
+        p_esq = [float(np.min(band_pts[:, 0])), baseline_y]
+        p_dir = [float(np.max(band_pts[:, 0])), baseline_y]
+        return baseline_y, p_esq, p_dir
+
+    # fallback: use bbox extremes at y_max
+    x_min = float(np.min(gota_pts[:, 0]))
+    x_max = float(np.max(gota_pts[:, 0]))
+    return y_max, [x_min, y_max], [x_max, y_max]
 
 
 def debug_plot_contact(contour, p_esq, p_dir):

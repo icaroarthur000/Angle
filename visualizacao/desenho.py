@@ -12,37 +12,10 @@ def desenhar_baseline(canvas, baseline_y, ratio, offset_x, offset_y,
 
     # 1. Definir a extensão da linha (do início ao fim da largura da imagem)
     # Se image_width não for passado, tentamos pegar do canvas, mas o ideal é vir do main
-    w_img = image_width if image_width else 1000 
+    w_img = image_width if image_width else 1000
 
-    if line_params is not None:
-        try:
-            vx, vy, x0, y0 = line_params
-            
-            # Cálculo do coeficiente angular (slope) físico da imagem
-            # Evita divisão por zero
-            den = vx if abs(vx) > 1e-9 else 1e-9
-            slope = vy / den
-
-            # Coordenadas em pixels da IMAGEM (Início em x=0, fim em x=w_img)
-            img_x1 = 0
-            img_y1 = y0 + (img_x1 - x0) * slope
-
-            img_x2 = w_img
-            img_y2 = y0 + (img_x2 - x0) * slope
-
-            # CONVERSÃO PARA TELA (AQUI É O SEGREDO):
-            # Aplicamos o ratio e o offset SOMENTE no final do cálculo geométrico
-            x1_scr = (img_x1 * ratio) + offset_x
-            y1_scr = (img_y1 * ratio) + offset_y
-            x2_scr = (img_x2 * ratio) + offset_x
-            y2_scr = (img_y2 * ratio) + offset_y
-
-            canvas.create_line(x1_scr, y1_scr, x2_scr, y2_scr, fill="red", width=2, tags="baseline")
-            return
-        except Exception as e:
-            print(f"Erro no desenho da baseline: {e}")
-
-    # 2. Fallback Horizontal (se não houver inclinação detectada)
+    # CORREÇÃO: Ignorar line_params temporariamente
+    # Sempre usar a linha horizontal até corrigir o cálculo de line_params
     y_scr = (baseline_y * ratio) + offset_y
     x_start = offset_x
     x_end = offset_x + (w_img * ratio)

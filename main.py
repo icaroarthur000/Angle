@@ -524,7 +524,18 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.canvas.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
 
         self.canvas.bind("<MouseWheel>", self.zoom)
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+        self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
+        self.canvas.bind("<Button-3>", self.on_pan_start)
+        self.canvas.bind("<B3-Motion>", self.on_pan_drag)
+        self.canvas.bind("<ButtonRelease-3>", self.on_pan_release)
         self.bind("<Configure>", lambda e: self.render())
+
+        # Estado para arrastar pontos
+        self.dragging_point = None  # 'esq', 'dir', ou None
+        # Estado para pan (arrastar imagem)
+        self.pan_start_pos = None
 
     def res_box(self, label, highlight=False):
         f = ctk.CTkFrame(
@@ -561,6 +572,20 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.p_esq = res.get('p_esq')
         self.p_dir = res.get('p_dir')
         self.contact_method = res.get('contact_method')
+
+        # Garantia de segurança: se baseline/contatos vierem inválidos, usa a base do contorno
+        try:
+            baseline_ok = self.baseline_y is not None and np.isfinite(self.baseline_y)
+        except Exception:
+            baseline_ok = False
+        if not baseline_ok or self.p_esq is None or self.p_dir is None:
+            base_y, base_p_esq, base_p_dir = linha_base.encontrar_pontos_contato_base(self.gota_pts)
+            if baseline_ok is False:
+                self.baseline_y = base_y
+            if self.p_esq is None and base_p_esq is not None:
+                self.p_esq = base_p_esq
+            if self.p_dir is None and base_p_dir is not None:
+                self.p_dir = base_p_dir
 
         # DEBUG: ajuda a identificar se os pontos foram detectados corretamente
         print(f"DEBUG: p_esq={self.p_esq}, p_dir={self.p_dir}, line_params={self.baseline_line_params}, method={self.baseline_method}")
@@ -711,6 +736,101 @@ class ContactAngleApp(ctk.CTkToplevel):
                 )
             except:
                 pass
+
+    # ============ MÉTODOS PARA ARRASTAR PONTOS MANUALMENTE ============
+    
+    def on_canvas_click(self, e):
+        """Detecta clique nos pontos de contato amarelos."""
+        if self.p_esq is None or self.p_dir is None:
+            return
+        
+        # Calcular offsets da tela para imagem
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        ih, iw = self.raw_image.shape[:2]
+        ratio_local = min(cw / iw, ch / ih) * self.zoom_scale
+        nw = int(iw * ratio_local)
+        nh = int(ih * ratio_local)
+        ox = (cw - nw) // 2 + self.pan_offset_x
+        oy = (ch - nh) // 2 + self.pan_offset_y
+        
+        # Converter coordenadas da tela para imagem
+        img_x = (e.x - ox) / ratio_local
+        img_y = (e.y - oy) / ratio_local
+        
+        # Verificar se clicou perto dos pontos (raio: 15 pixels na tela)
+        screen_radius = 15
+        img_radius = screen_radius / ratio_local if ratio_local > 0 else 15
+        
+        dist_esq = np.hypot(img_x - self.p_esq[0], img_y - self.p_esq[1])
+        dist_dir = np.hypot(img_x - self.p_dir[0], img_y - self.p_dir[1])
+        
+        if dist_esq < img_radius:
+            self.dragging_point = 'esq'
+        elif dist_dir < img_radius:
+            self.dragging_point = 'dir'
+
+    def on_canvas_drag(self, e):
+        """Arrasta o ponto enquanto o mouse se move."""
+        if self.dragging_point is None:
+            return
+        
+        # Calcular offsets da tela para imagem
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        ih, iw = self.raw_image.shape[:2]
+        ratio_local = min(cw / iw, ch / ih) * self.zoom_scale
+        nw = int(iw * ratio_local)
+        nh = int(ih * ratio_local)
+        ox = (cw - nw) // 2 + self.pan_offset_x
+        oy = (ch - nh) // 2 + self.pan_offset_y
+        
+        # Converter coordenadas da tela para imagem
+        img_x = (e.x - ox) / ratio_local
+        img_y = (e.y - oy) / ratio_local
+        
+        # Limitar ao contorno da imagem
+        img_x = np.clip(img_x, 0, iw - 1)
+        img_y = np.clip(img_y, 0, ih - 1)
+        
+        # Atualizar o ponto sendo arrastado
+        if self.dragging_point == 'esq':
+            self.p_esq = [float(img_x), float(img_y)]
+        elif self.dragging_point == 'dir':
+            self.p_dir = [float(img_x), float(img_y)]
+        
+        # Atualizar baseline_y como a média entre os dois pontos
+        self.baseline_y = (self.p_esq[1] + self.p_dir[1]) / 2.0
+        
+        # Recalcular ângulos e renderizar em tempo real
+        self.calculate()
+
+    def on_canvas_release(self, e):
+        """Solta o ponto quando mouse é liberado."""
+        self.dragging_point = None
+
+    def on_pan_start(self, e):
+        """Inicia pan (arrastar imagem) com botão direito."""
+        self.pan_start_pos = (e.x, e.y)
+
+    def on_pan_drag(self, e):
+        """Arrasta a imagem enquanto botão direito está pressionado."""
+        if self.pan_start_pos is None:
+            return
+        
+        dx = e.x - self.pan_start_pos[0]
+        dy = e.y - self.pan_start_pos[1]
+        
+        self.pan_offset_x += dx
+        self.pan_offset_y += dy
+        
+        self.pan_start_pos = (e.x, e.y)
+        
+        self.render()
+
+    def on_pan_release(self, e):
+        """Libera o pan quando botão direito é solto."""
+        self.pan_start_pos = None
 
     def _on_close(self):
         try:

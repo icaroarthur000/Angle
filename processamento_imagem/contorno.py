@@ -31,6 +31,7 @@ def encontrar_contorno_gota(imagem_binaria):
     # NOVO: Filtrar contornos que tocam as bordas da imagem
     h, w = img.shape[:2]
     margin = 5  # pixels de margem para considerar "tocando a borda"
+    MAX_BORDER_TOUCHES = 3  # Contornos que tocam 3+ bordas são considerados borda da imagem
     valid_contours = []
 
     for c in conts:
@@ -42,10 +43,10 @@ def encontrar_contorno_gota(imagem_binaria):
         touches_top = np.any(pts[:, 1] <= margin)
         touches_bottom = np.any(pts[:, 1] >= h - margin)
         
-        # Se tocar 3 ou mais bordas, provavelmente é a borda da imagem
+        # Se tocar 3 ou mais bordas, provavelmente é a borda da imagem (não a gota)
         border_count = sum([touches_left, touches_right, touches_top, touches_bottom])
         
-        if border_count < 3:  # Aceitar apenas se tocar menos de 3 bordas
+        if border_count < MAX_BORDER_TOUCHES:  # Aceitar apenas se tocar menos de 3 bordas
             valid_contours.append(c)
 
     if not valid_contours:

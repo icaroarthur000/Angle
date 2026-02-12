@@ -471,17 +471,23 @@ def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
     Procura a baseline na região de transição gota-superfície.
     CORREÇÃO: Busca na região de 85-98% da altura (não até 100%).
     """
+    # Constantes de configuração
+    DEFAULT_BASELINE_RATIO = 0.90  # Percentil padrão para baseline (90% da altura)
+    SEARCH_START_RATIO = 0.85      # Início da região de busca (85% da altura)
+    SEARCH_END_RATIO = 0.98        # Fim da região de busca (98% da altura)
+    PERCENTILE_FALLBACK = 90       # Percentil usado quando validação falha
+    
     pts = gota_pts.astype(np.int32)
     x, y, w, h = cv2.boundingRect(pts)
     
     # CORREÇÃO CRÍTICA: Buscar apenas na região SUPERIOR à base
     min_width = float('inf')
-    # Valor padrão: 90% da altura do bbox (usado se nenhuma cintura for encontrada no loop)
-    y_res = float(y + h * 0.90)
+    # Valor padrão: usado se nenhuma cintura for encontrada no loop
+    y_res = float(y + h * DEFAULT_BASELINE_RATIO)
     
     # Buscar entre 85% e 98% (NÃO até 100%)
-    row_start = int(y + h * 0.85)
-    row_end = int(y + h * 0.98)  # Para ANTES do fim
+    row_start = int(y + h * SEARCH_START_RATIO)
+    row_end = int(y + h * SEARCH_END_RATIO)  # Para ANTES do fim
     step = max(1, h // 100)
     
     for row in range(row_start, row_end, step):
@@ -495,11 +501,12 @@ def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
     # Validação: se o resultado está muito longe da base real, ajustar
     y_max_gota = np.max(gota_pts[:, 1])
     
-    # Se a baseline está muito acima (y menor) da base real da gota (detectou cintura no meio)
-    # Isso acontece quando y_res está em menos de 85% da distância até o fundo
-    if y_res < (y + h * 0.85):
+    # Se a baseline está muito acima da região esperada (detectou cintura no meio da gota)
+    # Em coordenadas de imagem, Y aumenta para baixo: menor Y = mais alto na imagem
+    # Verifica se y_res está acima (menor que) do limite inferior da região de busca
+    if y_res < (y + h * SEARCH_START_RATIO):
         # Usar o percentil 90 dos pontos Y (perto da base mas não no extremo)
-        y_res = float(np.percentile(gota_pts[:, 1], 90))
+        y_res = float(np.percentile(gota_pts[:, 1], PERCENTILE_FALLBACK))
     
     return y_res
 

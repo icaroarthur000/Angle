@@ -467,21 +467,48 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
     }
 
 def detectar_baseline_cintura(gota_pts: np.ndarray) -> float:
-    """Procura a menor largura na base. Útil quando o substrato está invisível."""
-    # OpenCV expects CV_32F or CV_32S for point sets; cast to int32 for robustness
+    """
+    Procura a baseline na região de transição gota-superfície.
+    CORREÇÃO: Busca na região de 85-98% da altura (não até 100%).
+    """
+    # Constantes de configuração
+    DEFAULT_BASELINE_RATIO = 0.90  # Percentil padrão para baseline (90% da altura)
+    SEARCH_START_RATIO = 0.85      # Início da região de busca (85% da altura)
+    SEARCH_END_RATIO = 0.98        # Fim da região de busca (98% da altura)
+    PERCENTILE_FALLBACK = 90       # Percentil usado quando validação falha
+    
     pts = gota_pts.astype(np.int32)
     x, y, w, h = cv2.boundingRect(pts)
-    # When contour is correct, the safest fallback is to use the lowest
-    # meaningful contour band (near max y), not a mid-height "neck".
-    bottom_ignore_px = 1
-    y_bottom = float(y + h)
-    candidates = gota_pts[gota_pts[:, 1] <= (y_bottom - bottom_ignore_px)]
-    if len(candidates) >= 2:
-        # Use a very high percentile to stay near the base without hitting noise
-        return float(np.percentile(candidates[:, 1], 99))
+    
+    # CORREÇÃO CRÍTICA: Buscar apenas na região SUPERIOR à base
+    min_width = float('inf')
+    # Valor padrão: usado se nenhuma cintura for encontrada no loop
+    y_res = float(y + h * DEFAULT_BASELINE_RATIO)
+    
+    # Buscar entre 85% e 98% (NÃO até 100%)
+    row_start = int(y + h * SEARCH_START_RATIO)
+    row_end = int(y + h * SEARCH_END_RATIO)  # Para ANTES do fim
+    step = max(1, h // 100)
+    
+    for row in range(row_start, row_end, step):
+        row_pts = gota_pts[np.abs(gota_pts[:, 1] - row) < 2]
+        if len(row_pts) >= 2:
+            width = np.max(row_pts[:, 0]) - np.min(row_pts[:, 0])
+            if width < min_width:
+                min_width = width
+                y_res = float(row)
 
-    # Last resort: return just above the bottom of the bounding box
-    return float(y_bottom - bottom_ignore_px)
+    # Validação: se o resultado está muito longe da base real, ajustar
+    y_max_gota = np.max(gota_pts[:, 1])
+    
+    # Se a baseline está muito acima da região esperada (detectou cintura no meio da gota)
+    # Em coordenadas de imagem, Y aumenta para baixo: menor Y = mais alto na imagem
+    # Verifica se y_res está acima (menor que) do limite inferior da região de busca
+    if y_res < (y + h * SEARCH_START_RATIO):
+        # Usar o percentil 90 dos pontos Y (perto da base mas não no extremo)
+        y_res = float(np.percentile(gota_pts[:, 1], PERCENTILE_FALLBACK))
+    
+    return y_res
 
 def encontrar_pontos_contato(gota_pts: np.ndarray, baseline_y: float) -> Tuple:
     """Apenas localiza os extremos horizontais em uma altura Y fixa."""

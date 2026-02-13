@@ -24,7 +24,7 @@ def safe_normalize(dx: float, dy: float, eps: float = EPS_NORMALIZE) -> Tuple[fl
 # BLOCO 1: DETECÇÃO DA BASELINE - FLOOR-SEEKER (NOVO)
 # =================================================================
 
-def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30) -> Tuple[float, Optional[Tuple]]:
+def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30, debug: bool = False) -> Tuple[float, Optional[Tuple]]:
     """
     ═══════════════════════════════════════════════════════════════
     FLOOR-SEEKER SIMPLIFICADO (FÍSICA PURA):
@@ -61,7 +61,8 @@ def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30) -> 
     
     if len(floor_pts) < 2:
         # Fallback: nenhum ponto encontrado? Use extremos
-        print(f"[FLOOR-SEEKER] AVISO: Nenhum ponto no piso, usando extremos!")
+        if debug:
+            print(f"[FLOOR-SEEKER] AVISO: Nenhum ponto no piso, usando extremos!")
         x0 = float(np.mean(gota_pts[:, 0]))
         return y_max, (1.0, 0.0, x0, y_max)
     
@@ -72,7 +73,8 @@ def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30) -> 
     vx, vy = 1.0, 0.0
     
     # DEBUG
-    print(f"[FLOOR-SEEKER] Y={y_max:.1f}, {len(floor_pts)} pontos no piso, x0={x0:.1f}")
+    if debug:
+        print(f"[FLOOR-SEEKER] Y={y_max:.1f}, {len(floor_pts)} pontos no piso, x0={x0:.1f}")
     
     return float(y_max), (float(vx), float(vy), float(x0), float(y_max))
 
@@ -86,7 +88,8 @@ def find_contact_points_by_extrapolation(
     baseline_y: float,
     roi_bottom: float = ROI_BOTTOM_EXCLUDE,
     roi_top: float = ROI_TOP_EXCLUDE,
-    degree: int = POLYFIT_DEGREE
+    degree: int = POLYFIT_DEGREE,
+    debug: bool = False
 ) -> Tuple[Optional[List[float]], Optional[List[float]]]:
     """
     MÉTODO CIENTÍFICO: Extrapolação Polinomial para precisão sub-pixel.
@@ -113,7 +116,8 @@ def find_contact_points_by_extrapolation(
     
     x_center = float(np.mean(gota_pts[:, 0]))
     
-    print(f"[EXTRAPOLAÇÃO] ROI: {len(roi_pts)} pontos entre Y={y_roi_top:.1f} e Y={y_roi_bottom:.1f}")
+    if debug:
+        print(f"[EXTRAPOLAÇÃO] ROI: {len(roi_pts)} pontos entre Y={y_roi_top:.1f} e Y={y_roi_bottom:.1f}")
     
     # Separa em esquerda e direita
     left_pts = roi_pts[roi_pts[:, 0] < x_center]
@@ -134,11 +138,13 @@ def find_contact_points_by_extrapolation(
             if not np.isfinite(x_contact):
                 return None
             
-            print(f"[{side_name}] Ponto de contato extrapolado: ({x_contact:.2f}, {baseline_y:.2f})")
+            if debug:
+                print(f"[{side_name}] Ponto de contato extrapolado: ({x_contact:.2f}, {baseline_y:.2f})")
             return [float(x_contact), float(baseline_y)]
         
         except Exception as e:
-            print(f"[{side_name}] Erro no polyfit: {e}")
+            if debug:
+                print(f"[{side_name}] Erro no polyfit: {e}")
             return None
     
     p_esq = extrapolate_side(left_pts, "ESQUERDA")
@@ -146,28 +152,32 @@ def find_contact_points_by_extrapolation(
     
     # Se ambos falharam, usar fallback
     if p_esq is None and p_dir is None:
-        print("[EXTRAPOLAÇÃO] Ambos os lados falharam, usando fallback geométrico")
-        return fallback_geometric(gota_pts, baseline_y)
+        if debug:
+            print("[EXTRAPOLAÇÃO] Ambos os lados falharam, usando fallback geométrico")
+        return fallback_geometric(gota_pts, baseline_y, debug=debug)
     
     # Se apenas um lado falhou, espelhar o outro
     if p_esq is None and p_dir is not None:
         dist = abs(p_dir[0] - x_center)
         p_esq = [x_center - dist, baseline_y]
-        print(f"[ESQUERDA] Espelhado a partir da direita: ({p_esq[0]:.2f}, {p_esq[1]:.2f})")
+        if debug:
+            print(f"[ESQUERDA] Espelhado a partir da direita: ({p_esq[0]:.2f}, {p_esq[1]:.2f})")
     
     if p_dir is None and p_esq is not None:
         dist = abs(p_esq[0] - x_center)
         p_dir = [x_center + dist, baseline_y]
-        print(f"[DIREITA] Espelhado a partir da esquerda: ({p_dir[0]:.2f}, {p_dir[1]:.2f})")
+        if debug:
+            print(f"[DIREITA] Espelhado a partir da esquerda: ({p_dir[0]:.2f}, {p_dir[1]:.2f})")
     
     return p_esq, p_dir
 
 
-def fallback_geometric(gota_pts: np.ndarray, baseline_y: float) -> Tuple[Optional[List[float]], Optional[List[float]]]:
+def fallback_geometric(gota_pts: np.ndarray, baseline_y: float, debug: bool = False) -> Tuple[Optional[List[float]], Optional[List[float]]]:
     """
     Fallback simples: Pegar extremos horizontais próximos à baseline.
     """
-    print("[FALLBACK] Usando detecção geométrica simples")
+    if debug:
+        print("[FALLBACK] Usando detecção geométrica simples")
     
     tolerance = 5
     near_baseline = gota_pts[np.abs(gota_pts[:, 1] - baseline_y) < tolerance]
@@ -186,9 +196,13 @@ def fallback_geometric(gota_pts: np.ndarray, baseline_y: float) -> Tuple[Optiona
 # BLOCO 3: PIPELINE MAESTRO (Orquestração)
 # =================================================================
 
-def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
+def detectar_baseline_hibrida(gota_pts: np.ndarray, debug: bool = False) -> Dict:
     """
     Pipeline completo: Floor-Seeker + Extrapolação Polinomial.
+    
+    Args:
+        gota_pts: Contorno da gota (Nx2 array)
+        debug: Se True, exibe mensagens de debug no console
     """
     def _norm_pt(p):
         if p is None:
@@ -205,15 +219,16 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
             'contact_method': 'failed'
         }
     
-    print("\n" + "="*60)
-    print("DETECÇÃO - FLOOR-SEEKER + EXTRAPOLAÇÃO")
-    print("="*60)
+    if debug:
+        print("\n" + "="*60)
+        print("DETECÇÃO - FLOOR-SEEKER + EXTRAPOLAÇÃO")
+        print("="*60)
     
     # 1. Detectar baseline com FLOOR-SEEKER (Y máximo)
-    baseline_y, line_params = detect_baseline_tls(gota_pts)
+    baseline_y, line_params = detect_baseline_tls(gota_pts, debug=debug)
     
     # 2. Encontrar pontos de contato via extrapolação polinomial
-    p_esq, p_dir = find_contact_points_by_extrapolation(gota_pts, baseline_y)
+    p_esq, p_dir = find_contact_points_by_extrapolation(gota_pts, baseline_y, debug=debug)
     
     # 3. Refinar line_params baseado nos pontos finais
     # ⚠️ MAS NÃO SOBRESCREVER baseline_y! Já temos o valor correto (Y_max)
@@ -225,11 +240,12 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray) -> Dict:
         # Mantém baseline_y original (Y máximo do contorno)
         line_params = (float(vx), float(vy), float(x0), float(baseline_y))
     
-    print(f"\n✓ RESULTADO FINAL:")
-    print(f"  Baseline Y: {baseline_y:.2f} [Y MÁXIMO DO CONTORNO]")
-    print(f"  Ponto Esquerdo: {_norm_pt(p_esq)}")
-    print(f"  Ponto Direito: {_norm_pt(p_dir)}")
-    print("="*60 + "\n")
+    if debug:
+        print(f"\n✓ RESULTADO FINAL:")
+        print(f"  Baseline Y: {baseline_y:.2f} [Y MÁXIMO DO CONTORNO]")
+        print(f"  Ponto Esquerdo: {_norm_pt(p_esq)}")
+        print(f"  Ponto Direito: {_norm_pt(p_dir)}")
+        print("="*60 + "\n")
     
     return {
         'baseline_y': baseline_y,

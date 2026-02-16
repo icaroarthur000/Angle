@@ -1,21 +1,3 @@
-"""preprocess.py
-
-Funções de pré-processamento robusto para medições de ângulo de contato.
-
-API principal:
-    - `preprocess_image_for_contact_angle(img_bgr, ...)` -> dict com chaves
-        `enhanced_gray`, `binary`, `corrected_bgr`, `debug_imgs`
-    - `save_debug_imgs(debug_dict, out_dir, prefix="dbg")` salva imagens de debug
-
-Principais características:
-    - correção de iluminação por divisão usando um background estimado
-    - CLAHE com grid que escala com o tamanho da imagem
-    - binarização adaptativa (Gaussian) com block size protegido para imagens pequenas
-    - limpeza morfológica opcional
-
-Este arquivo fornece validações de entrada e garante que `debug_imgs` contenha
-imagens uint8 prontas para salvar/exibição.
-"""
 
 import os
 from typing import Dict, Any, Optional, Tuple
@@ -50,14 +32,7 @@ def preprocess_image_for_contact_angle(img_bgr,
                                        adapt_blocksize=None,
                                        adapt_C=2,
                                        do_morph_cleanup=True):
-    """
-    Recebe imagem BGR (crop) e retorna dict:
-      - enhanced_gray: imagem após correção e CLAHE (uint8)
-      - binary: imagem binarizada (uint8, 0/255)
-      - corrected_bgr: enhanced_gray convertido para BGR (para preview)
-      - debug_imgs: dict {gray, bg, corrected, enhanced, binary}
-    Parâmetros adaptam-se ao tamanho da imagem quando None.
-    """
+   
     # --- Validação de entrada ---
     if not isinstance(img_bgr, np.ndarray):
         raise TypeError("img_bgr deve ser um numpy.ndarray")
@@ -132,17 +107,7 @@ def preprocess_image_for_contact_angle(img_bgr,
 
 
 def save_debug_imgs(debug_dict: Dict[str, Any], out_dir: str, prefix: str = "dbg") -> Dict[str, str]:
-    """Salva imagens do `debug_dict` em `out_dir` com o `prefix` e retorna um map de caminhos.
-    
-    Parâmetros:
-    - debug_dict: dict de nome->imagem (grayscale ou BGR), preferencialmente uint8
-    - out_dir: diretório de saída (será criado se não existir)
-    - prefix: prefixo dos nomes de arquivo (default: "dbg")
-    
-    Retorna:
-    - dict {nome: caminho_arquivo} para os itens salvos com sucesso
-    - Continua mesmo se algumas imagens falharem (não quebra pipeline)
-    """
+   
     os.makedirs(out_dir, exist_ok=True)
     saved: Dict[str, str] = {}
     

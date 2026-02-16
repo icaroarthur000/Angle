@@ -25,29 +25,7 @@ def safe_normalize(dx: float, dy: float, eps: float = EPS_NORMALIZE) -> Tuple[fl
 # =================================================================
 
 def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30, debug: bool = False) -> Tuple[float, Optional[Tuple]]:
-    """
-    ═══════════════════════════════════════════════════════════════
-    FLOOR-SEEKER SIMPLIFICADO (FÍSICA PURA):
-    Pega o piso FÍSICO real, nada de estatística.
-    ═══════════════════════════════════════════════════════════════
     
-    Estratégia ultra-direta:
-    1. Pega o Y MÁXIMO do contorno inteiro (ponto mais baixo = piso)
-    2. Encontra todos os pontos PRÓXIMOS ao piso (±5 pixels de contato)
-    3. Calcula orientação SEMPRE HORIZONTAL (baseline é o piso!)
-    
-    RESULTADO: Linha vermelha COLADA no piso real, sem flutuação, sem estatística.
-    
-    Baseado em: Física simples - o substrato é o ponto Y mais baixo do contorno.
-    
-    Args:
-        gota_pts: Contorno da gota (Nx2 array)
-        bottom_fraction: [IGNORADO] Deixado apenas para compatibilidade
-    
-    Returns:
-        baseline_y: Y MÁXIMO do contorno  (piso físico real)
-        line_params: (vx=1.0, vy=0.0, x0=centro, y0=y_max) - linha horizontal
-    """
     if gota_pts is None or len(gota_pts) < 5:
         return 0.0, None
     
@@ -173,9 +151,7 @@ def find_contact_points_by_extrapolation(
 
 
 def fallback_geometric(gota_pts: np.ndarray, baseline_y: float, debug: bool = False) -> Tuple[Optional[List[float]], Optional[List[float]]]:
-    """
-    Fallback simples: Pegar extremos horizontais próximos à baseline.
-    """
+
     if debug:
         print("[FALLBACK] Usando detecção geométrica simples")
     
@@ -197,13 +173,7 @@ def fallback_geometric(gota_pts: np.ndarray, baseline_y: float, debug: bool = Fa
 # =================================================================
 
 def detectar_baseline_hibrida(gota_pts: np.ndarray, debug: bool = False) -> Dict:
-    """
-    Pipeline completo: Floor-Seeker + Extrapolação Polinomial.
     
-    Args:
-        gota_pts: Contorno da gota (Nx2 array)
-        debug: Se True, exibe mensagens de debug no console
-    """
     def _norm_pt(p):
         if p is None:
             return None

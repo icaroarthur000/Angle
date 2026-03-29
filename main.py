@@ -643,10 +643,10 @@ class ContactAngleApp(ctk.CTkToplevel):
         if self.p_esq is None:
             return
 
-        ae = angulo_contato.calcular_angulo_polinomial(
+        ae = angulo_contato.calcular_angulo_circular(
             self.gota_pts, self.p_esq, self.p_dir, self.baseline_y, "esq"
         )
-        ad = angulo_contato.calcular_angulo_polinomial(
+        ad = angulo_contato.calcular_angulo_circular(
             self.gota_pts, self.p_esq, self.p_dir, self.baseline_y, "dir"
         )
 

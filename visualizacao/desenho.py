@@ -60,47 +60,42 @@ def desenhar_pontos_contato(canvas, p_esq, p_dir, to_scr):
                 canvas.create_oval(x-r, y-r, x+r, y+r, fill="yellow", outline="black", tags="contact_point")
             except Exception:
                 pass
-
-
 def desenhar_tangentes(canvas, p_esq, p_dir, ae, ad, zoom_scale, to_scr):
     """
-    Desenha as linhas de tangente nos pontos de contato.
-    
-    Args:
-        canvas: Canvas do Tkinter
-        p_esq: Ponto de contato esquerdo [x, y]
-        p_dir: Ponto de contato direito [x, y]
-        ae: Ângulo esquerdo em graus
-        ad: Ângulo direito em graus
-        zoom_scale: Escala de zoom
-        to_scr: Função para converter de coordenadas de imagem para tela
+    Desenha as linhas de tangente nos pontos de contato com proporção visual constante.
     """
     try:
         import math
         
-        # Comprimento da linha tangente (em pixels de imagem)
-        length = 40 / zoom_scale
+        # Define a escala para evitar distorção visual na aproximação
+        escala = zoom_scale if zoom_scale and zoom_scale > 0 else 1.0
+        length = 50 / escala 
         
         if p_esq is not None and len(p_esq) == 2:
             x, y = p_esq
-            # Converter ângulo para radianos
             angle_rad = math.radians(ae)
-            dx = length * math.cos(angle_rad)
-            dy = length * math.sin(angle_rad)
             
-            x1, y1 = to_scr(x - dx, y - dy)
+            # Vetor esquerdo: Y negativo para projetar a linha para cima
+            dx = length * math.cos(angle_rad)
+            dy = -length * math.sin(angle_rad)
+            
+            # Projeção de 20% abaixo da base para facilitar a visualização do vértice
+            x1, y1 = to_scr(x - 0.2 * dx, y - 0.2 * dy)
             x2, y2 = to_scr(x + dx, y + dy)
             canvas.create_line(x1, y1, x2, y2, fill="green", width=2, tags="tangent")
         
         if p_dir is not None and len(p_dir) == 2:
             x, y = p_dir
-            # Converter ângulo para radianos
             angle_rad = math.radians(ad)
-            dx = length * math.cos(angle_rad)
-            dy = length * math.sin(angle_rad)
             
-            x1, y1 = to_scr(x - dx, y - dy)
+            # Vetor direito: X negativo para espelhar, Y negativo para projetar para cima
+            dx = -length * math.cos(angle_rad)
+            dy = -length * math.sin(angle_rad)
+            
+            # Projeção de 20% abaixo da base para facilitar a visualização do vértice
+            x1, y1 = to_scr(x - 0.2 * dx, y - 0.2 * dy)
             x2, y2 = to_scr(x + dx, y + dy)
             canvas.create_line(x1, y1, x2, y2, fill="green", width=2, tags="tangent")
+            
     except Exception as e:
-        print(f"Erro ao desenhar tangentes: {e}")
+        print(f"Erro na renderização das tangentes: {e}")

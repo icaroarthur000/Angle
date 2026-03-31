@@ -1,0 +1,590 @@
+# Documentacao Matematica do Sistema Angle (Versao Final para Professor)
+
+Data: 31 de marco de 2026  
+Projeto: Angle - Contact Angle Measurement System  
+Objetivo: apresentar, em formato unico e academico, todas as formulas matematicas efetivamente usadas no software atual.
+
+---
+
+## 1. Convencoes e Notacao
+
+- Coordenadas de imagem: $(x, y)$
+- Coordenadas de tela: $(x_{tela}, y_{tela})$
+- Dimensoes do canvas: $(cw, ch)$
+- Dimensoes da imagem: $(iw, ih)$
+- Baseline bruta: $Y_{base}$
+- Baseline ajustada: $Y_{base}^{adj}$
+- Centro do circulo: $(x_c, y_c)$
+- Raio do circulo: $R$
+
+---
+
+## 2. Coordenadas e Escala (main.py)
+
+### 2.1 Conversao tela -> imagem (SelectionWindow)
+
+$$
+x_{img} = \frac{x_{tela} - offset_x}{ratio},
+\quad
+y_{img} = \frac{y_{tela} - offset_y}{ratio}
+$$
+
+Com saturacao:
+
+$$
+x_{img} = clip(x_{img}, 0, w-1),
+\quad
+y_{img} = clip(y_{img}, 0, h-1)
+$$
+
+### 2.2 Conversao imagem -> tela
+
+$$
+x_{tela} = x_{img}\cdot ratio + ox,
+\quad
+y_{tela} = y_{img}\cdot ratio + oy
+$$
+
+### 2.3 Escala de exibicao por janela
+
+SelectionWindow (janela de selecao):
+
+$$
+ratio = \min\left(\frac{cw}{iw}, \frac{ch}{ih}\right)
+$$
+
+ContactAngleApp (janela de analise):
+
+$$
+ratio = \min\left(\frac{cw}{iw}, \frac{ch}{ih}\right)\cdot zoom\_scale
+$$
+
+---
+
+## 3. Pre-processamento de Imagem
+
+### 3.1 Caminho principal (filtros.py)
+
+1) Conversao para cinza:
+
+$$
+Gray = cvtColor(BGR, BGR2GRAY)
+$$
+
+2) Suavizacao gaussiana:
+
+$$
+Blur = GaussianBlur(Gray, (5,5), 0)
+$$
+
+3) Binarizacao Otsu invertida:
+
+$$
+Bin = THRESH\_BINARY\_INV + OTSU(Blur)
+$$
+
+4) Fechamento morfologico:
+
+$$
+Bin = CLOSE(Bin, kernel\_eliptico\ 5\times5,\ iter=1)
+$$
+
+### 3.2 Caminho robusto (preprocess.py)
+
+#### 3.2.1 Denoise inicial (condicional)
+
+Se $nm\_gauss > 0$:
+
+$$
+k = \begin{cases}
+nm\_gauss, & \text{se } nm\_gauss \text{ for impar} \\
+nm\_gauss + 1, & \text{caso contrario}
+\end{cases}
+$$
+
+$$
+Gray = GaussianBlur(Gray, (k,k), 0)
+$$
+
+#### 3.2.2 Estimativa de fundo
+
+Sem parametro externo:
+
+$$
+k_{bg} = \max\left(51,\left\lfloor\frac{\min(h,w)}{6}\right\rfloor\ \texttt{|}\ 1\right)
+$$
+
+Com $bg\_ksize$ informado:
+
+$$
+k_{bg} = \begin{cases}
+bg\_ksize, & \text{se impar} \\
+bg\_ksize + 1, & \text{caso contrario}
+\end{cases}
+$$
+
+$$
+Background = GaussianBlur(Gray, (k_{bg}, k_{bg}), 0)
+$$
+
+#### 3.2.3 Correcao de iluminacao por divisao
+
+$$
+Corrected = \left(\frac{Gray + 1}{Background + 1}\right)\cdot 128
+$$
+
+$$
+Corrected = clip(Corrected, 0, 255)
+$$
+
+#### 3.2.4 CLAHE
+
+Se grade nao informada:
+
+$$
+tile = \max\left(1,\left\lfloor\frac{\min(h,w)}{50}\right\rfloor\right)
+$$
+
+$$
+tileGrid = (\min(8, tile),\ \min(8, tile))
+$$
+
+$$
+Enhanced = CLAHE(Corrected,\ clipLimit=2.0,\ tileGridSize=tileGrid)
+$$
+
+#### 3.2.5 Limiarizacao adaptativa
+
+$$
+blockSize = \max\left(31,\left\lfloor\frac{\min(h,w)}{30}\right\rfloor\ \texttt{|}\ 1\right)
+$$
+
+Com ajuste de limite:
+
+$$
+max\_allowed = \max\left(3,\ \min(h,w) - \big(1\ \text{se }\min(h,w)\text{ par, senao }0\big)\right)
+$$
+
+Se $blockSize \ge \min(h,w)$:
+
+$$
+blockSize = \begin{cases}
+max\_allowed, & \text{se impar} \\
+max\_allowed - 1, & \text{caso contrario}
+\end{cases}
+$$
+
+$$
+Binary = AdaptiveThresholdGaussian(Enhanced,\ THRESH\_BINARY\_INV,\ blockSize,\ C=2)
+$$
+
+#### 3.2.6 Limpeza morfologica
+
+$$
+Binary = OPEN(Binary,\ kernel\_eliptico\ 3\times3,\ iter=1)
+$$
+
+$$
+Binary = CLOSE(Binary,\ kernel\_eliptico\ 3\times3,\ iter=1)
+$$
+
+---
+
+## 4. Deteccao de Contorno (contorno.py)
+
+1) Fechamento inicial:
+
+$$
+Processed = CLOSE(img,\ kernel\ 3\times3,\ iter=1)
+$$
+
+2) Mascara de borda preta (espessura 10):
+
+$$
+Processed \leftarrow rectangle\_border\_zero(Processed,\ thickness=10)
+$$
+
+3) Contorno externo:
+
+$$
+contours = findContours(Processed,\ RETR\_EXTERNAL,\ CHAIN\_APPROX\_NONE)
+$$
+
+4) Fallback por Canny:
+
+$$
+Edges = Canny(img, 30, 100)
+$$
+
+5) Filtro topologico de bordas (margem 5):
+
+$$
+border\_count = I_{left} + I_{right} + I_{top} + I_{bottom}
+$$
+
+Aceita se:
+
+$$
+border\_count < 3
+$$
+
+6) Filtro de area:
+
+$$
+Area(contorno) \ge 100
+$$
+
+7) Filtro final de pontos (margem 10):
+
+$$
+10 < x < w-10\ \land\ 10 < y < h-10
+$$
+
+---
+
+## 5. Baseline e Pontos de Contato (linha_base.py)
+
+### 5.1 Normalizacao segura
+
+$$
+dist = hypot(dx, dy)
+$$
+
+$$
+(dx',dy') = \begin{cases}
+(1,0), & \text{se } dist < 10^{-8} \\
+\left(\frac{dx}{dist},\frac{dy}{dist}\right), & \text{caso contrario}
+\end{cases}
+$$
+
+### 5.2 Baseline por Floor-Seeker
+
+$$
+Y_{base} = \max(Y_{contorno})
+$$
+
+$$
+floor\_pts = \{pontos\ :\ |Y - Y_{base}| \le 5\}
+$$
+
+$$
+x_0 = media(X_{floor\_pts}),\quad (v_x,v_y)=(1,0)
+$$
+
+### 5.3 Extrapolacao polinomial (grau 2)
+
+Constantes atuais:
+
+$$
+ROI\_TOP\_EXCLUDE = 0.20,
+\quad ROI\_BOTTOM\_EXCLUDE = 0.005,
+\quad POLYFIT\_DEGREE = 2
+$$
+
+Altura:
+
+$$
+height = Y_{max} - Y_{min}
+$$
+
+ROI vertical:
+
+$$
+y_{roi\_top} = Y_{min} + 0.20\cdot height,
+\quad y_{roi\_bottom} = Y_{max} - 0.005\cdot height
+$$
+
+Separacao lateral:
+
+$$
+x_{center} = media(X_{contorno})
+$$
+
+Ajuste por lado:
+
+$$
+X(Y) = aY^2 + bY + c
+$$
+
+Contato extrapolado:
+
+$$
+X_{contato} = X(Y_{base})
+$$
+
+Espelhamento de lado faltante:
+
+$$
+dist = |X_{lado\_valido} - x_{center}|,
+\quad X_{faltante} = x_{center} \pm dist
+$$
+
+Fallback geometrico:
+
+$$
+near\_baseline = \{pontos\ :\ |Y - Y_{base}| < 5\}
+$$
+
+$$
+X_{esq} = \min(X_{near}),\quad X_{dir} = \max(X_{near})
+$$
+
+---
+
+## 6. Calculo do Angulo de Contato (angulo_contato.py)
+
+Estrategia do modulo:
+
+- Nao ha chaveamento previo por aspect ratio.
+- O calculo principal tenta ajuste circular.
+- O fallback polinomial e acionado por falha numerica/geometrica.
+
+### 6.1 Calibracao da baseline
+
+$$
+Y_{base}^{adj} = Y_{base} + 3.0
+$$
+
+### 6.2 Janela de pontos para ajuste
+
+$$
+mask = (Y < Y_{base}^{adj} - 3)\ \land\ (Y > Y_{base}^{adj} - 150)
+$$
+
+### 6.3 Selecao por lado
+
+$$
+x_{center\_aprox} = \frac{x_{esq} + x_{dir}}{2}
+$$
+
+Lado esquerdo: $X < x_{center\_aprox}$  
+Lado direito: $X > x_{center\_aprox}$
+
+### 6.4 Centralizacao
+
+$$
+mean\_{xy} = media(local\_pts),
+\quad local\_pts\_{centered} = local\_pts - mean\_{xy}
+$$
+
+### 6.5 Ajuste circular algebrico de Kasa
+
+No ajuste `ajustar_circulo_algebrico(pontos)`:
+
+$$
+u = x - x_m,
+\quad v = y - y_m
+$$
+
+$$
+S_{uu}=\sum u^2,
+\ S_{vv}=\sum v^2,
+\ S_{uv}=\sum uv,
+\ S_{uuu}=\sum u^3,
+\ S_{vvv}=\sum v^3,
+\ S_{uvv}=\sum uv^2,
+\ S_{uuv}=\sum u^2v
+$$
+
+$$
+A = \begin{bmatrix}S_{uu} & S_{uv} \\ S_{uv} & S_{vv}\end{bmatrix},
+\quad
+B = \frac{1}{2}\begin{bmatrix}S_{uuu}+S_{uvv} \\ S_{vvv}+S_{uuv}\end{bmatrix}
+$$
+
+$$
+\begin{bmatrix}u_c \\ v_c\end{bmatrix} = solve(A,B)
+$$
+
+$$
+x_c = x_m + u_c,
+\quad y_c = y_m + v_c,
+\quad R = media\left(\sqrt{(x-x_c)^2 + (y-y_c)^2}\right)
+$$
+
+Reconversao no fluxo principal (apos ajuste final com pontos centrados):
+
+$$
+x_c^{global} = x_c + mean\_{xy}[0],
+\quad y_c^{global} = y_c + mean\_{xy}[1]
+$$
+
+### 6.6 Filtro de outliers por sigma
+
+No espaco centrado:
+
+$$
+d_i = hypot(local\_pts\_{centered}[i,0]-x_{c0},\ local\_pts\_{centered}[i,1]-y_{c0})
+$$
+
+$$
+residuals_i = |d_i - R_0|,
+\quad sigma = std(residuals)
+$$
+
+Inlier:
+
+$$
+residuals_i \le 2\cdot sigma
+$$
+
+### 6.7 Intersecao circulo-reta (sub-pixel)
+
+$$
+dy = Y_{base}^{adj} - y_c
+$$
+
+Criterio de existencia:
+
+$$
+|dy| < R
+$$
+
+Se $|dy| \ge R$: fallback polinomial.
+
+$$
+dx = \sqrt{\max(0, R^2 - dy^2)}
+$$
+
+$$
+x_{contato} = \begin{cases}
+x_c - dx, & lado\ esq \\
+x_c + dx, & lado\ dir
+\end{cases}
+$$
+
+### 6.8 Tangente por derivada implicita
+
+$$
+m_{tangente} = -\frac{x_{contato} - x_c}{Y_{base}^{adj} - y_c}
+$$
+
+Se denominador $=0$: $\theta = 90^\circ$.  
+Caso geral:
+
+$$
+\theta = \arctan(|m_{tangente}|),
+\quad \theta_{graus} = degrees(\theta)
+$$
+
+### 6.9 Ajuste de quadrante
+
+$$
+\text{se } y_c > Y_{base}^{adj},\ \theta_{graus} = 180 - \theta_{graus}
+$$
+
+Resultado final:
+
+$$
+\theta = clip(\theta_{graus}, 0, 180)
+$$
+
+### 6.10 Fallback polinomial angular
+
+Funcao: `_calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)`
+
+Observacoes de implementacao:
+
+- `local_pts` no fallback esta em coordenadas originais da imagem (nao centradas).
+- A derivada e avaliada em $Y_{base}$ (baseline bruta), nao em $Y_{base}^{adj}$.
+
+Ajuste:
+
+$$
+X(Y) = aY^2 + bY + c
+$$
+
+Derivada:
+
+$$
+\frac{dX}{dY} = 2aY_{base} + b
+$$
+
+Angulo:
+
+$$
+\theta = \arctan\left(\frac{1}{dX/dY}\right)
+$$
+
+Com tratamento de quadrante por lado e saturacao final em $[0,180]$.
+
+Criterios de disparo do fallback circular:
+
+$$
+(R \le 0)\ \lor\ (|Y_{base}^{adj} - y_c| \ge R)\ \lor\ erro\ numerico\ de\ ajuste/solve
+$$
+
+---
+
+## 7. Visualizacao Matematica (desenho.py)
+
+### 7.1 Baseline na tela
+
+$$
+y_{scr} = baseline_y\cdot ratio + offset_y
+$$
+
+$$
+x_{start} = offset_x,
+\quad x_{end} = offset_x + image\_width\cdot ratio
+$$
+
+### 7.2 Tangentes desenhadas
+
+$$
+length = \frac{50}{zoom\_scale}
+$$
+
+Esquerda:
+
+$$
+dx = length\cdot\cos(ae_{rad}),
+\quad dy = -length\cdot\sin(ae_{rad})
+$$
+
+Direita:
+
+$$
+dx = -length\cdot\cos(ad_{rad}),
+\quad dy = -length\cdot\sin(ad_{rad})
+$$
+
+Segmento com projecao de 20%:
+
+$$
+P_1 = (x - 0.2\cdot dx,\ y - 0.2\cdot dy),
+\quad P_2 = (x + dx,\ y + dy)
+$$
+
+---
+
+## 8. Quadro Unico de Formulas (Resumo Executivo)
+
+1. SelectionWindow: $ratio = \min(cw/iw, ch/ih)$
+2. ContactAngleApp: $ratio = \min(cw/iw, ch/ih)\cdot zoom\_scale$
+3. $x_{img}=(x_{tela}-offset_x)/ratio,\ y_{img}=(y_{tela}-offset_y)/ratio$
+4. Otsu invertido: $THRESH\_BINARY\_INV + OTSU$
+5. $Corrected=((Gray+1)/(Background+1))\cdot128$
+6. $k_{bg}=\max(51,(\min(h,w)//6)|1)$
+7. $tile=\max(1,\lfloor\min(h,w)/50\rfloor),\ tileGrid=(\min(8,tile),\min(8,tile))$
+8. $blockSize=\max(31,(\min(h,w)//30)|1)$ com ajuste por $max\_allowed$
+9. $Y_{base}=\max(Y_{contorno})$
+10. $floor\_pts: |Y-Y_{base}|\le5$
+11. $y_{roi\_top}=Y_{min}+0.20\cdot height$
+12. $y_{roi\_bottom}=Y_{max}-0.005\cdot height$
+13. $X(Y)=aY^2+bY+c$
+14. $safe\_normalize=(dx,dy)/hypot(dx,dy)$
+15. $Y_{base}^{adj}=Y_{base}+3.0$
+16. Kasa: $solve(A,B)$ com $A=[[S_{uu},S_{uv}],[S_{uv},S_{vv}]]$
+17. $R=media(\sqrt{(x-x_c)^2+(y-y_c)^2})$
+18. Inlier: $residuals_i\le2\sigma$
+19. $dx=\sqrt{\max(0,R^2-dy^2)},\ dy=Y_{base}^{adj}-y_c$
+20. $m_{tangente}=-(x_{contato}-x_c)/(Y_{base}^{adj}-y_c)$
+21. $\theta=degrees(atan(|m_{tangente}|))$
+22. Se $y_c>Y_{base}^{adj}$: $\theta=180-\theta$
+23. Fallback: $dX/dY=2aY_{base}+b,\ \theta=atan(1/(dX/dY))$
+24. Criterio fallback circular: $(R\le0)\lor(|Y_{base}^{adj}-y_c|\ge R)\lor erro\ numerico$
+
+---
+
+Fim do documento.

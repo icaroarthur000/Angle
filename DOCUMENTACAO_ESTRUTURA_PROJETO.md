@@ -1,1007 +1,520 @@
-# 📊 DOCUMENTAÇÃO - ESTRUTURA E FÓRMULAS MATEMÁTICAS
-## Sistema Analisador de Ângulo de Contato em Gotas
+# Documentacao Matematica do Sistema Angle
 
-**Data de Criação:** 23 de março de 2026  
-**Projeto:** Angle - Contact Angle Measurement System  
-**Versão da Documentação:** 1.0
-
----
-
-## 📋 ÍNDICE
-
-1. [Estrutura Geral do Projeto](#estrutura-geral)
-2. [1. Processamento de Imagem](#processamento-imagem)
-3. [2. Detecção de Contorno](#deteccao-contorno)
-4. [3. Linha Base e Pontos de Contato](#linha-base)
-5. [4. Cálculo do Ângulo de Contato](#calculo-angulo)
-6. [5. Visualização](#visualizacao)
-7. [Resumo das Fórmulas Principais](#resumo-formulas)
+Data: 30 de marco de 2026
+Projeto: Angle - Contact Angle Measurement System
+Objetivo: documentar TODAS as formulas matematicas realmente usadas no codigo atual, em ordem de execucao.
 
 ---
 
-## 🔬 ESTRUTURA GERAL DO PROJETO {#estrutura-geral}
+## 1. Fluxo Matematico Completo (ordem de execucao)
 
-O sistema é um **analisador de ângulo de contato em gotas** com interface gráfica. O fluxo é:
-
-```
-Imagem (câmera/arquivo) 
-    ↓
-Processamento de Imagem
-    ↓
-Detecção de Contorno
-    ↓
-Detecção de Linha Base
-    ↓
-Detecção de Pontos de Contato
-    ↓
-Cálculo do Ângulo de Contato
-    ↓
-Visualização
-```
-
-### Estrutura de Arquivos
-
-```
-Angle/
-├── main.py                          # Interface gráfica (Tkinter/CustomTkinter)
-├── Foto.py                          # Script de análise de imagem (exemplo)
-├── processamento_imagem/
-│   ├── filtros.py                  # Pipeline simples (converte, blur, threshold)
-│   ├── preprocess.py               # Pipeline robusto (CLAHE, correção iluminação)
-│   └── contorno.py                 # Detecção do contorno da gota
-├── linha_base/
-│   └── linha_base.py               # Detecção baseline + pontos de contato
-├── Cal_angulo/
-│   └── angulo_contato.py           # Cálculo do ângulo (Circle + Polynomial)
-└── visualizacao/
-    └── desenho.py                  # Renderização na tela
-```
+1. Selecao da ROI (usuario) e conversao de coordenadas tela-imagem em `main.py`
+2. Pre-processamento da ROI (caminho principal em `processamento_imagem/filtros.py`, com fallback robusto em `processamento_imagem/preprocess.py`)
+3. Extracao do contorno em `processamento_imagem/contorno.py`
+4. Deteccao da baseline e pontos de contato em `linha_base/linha_base.py`
+5. Calculo angular principal circular + fallback polinomial em `Cal_angulo/angulo_contato.py`
+6. Conversoes de visualizacao e desenho das tangentes em `visualizacao/desenho.py`
 
 ---
 
-## 🔬 1. PROCESSAMENTO DE IMAGEM {#processamento-imagem}
+## 2. Coordenadas e ROI (main.py)
 
-### 1.1 - `filtros.py` (Pipeline Simples)
+### 2.1 Conversao tela -> imagem
+Usada em `SelectionWindow.canvas_to_img`:
 
-**Objetivo:** Converter imagem bruta em máscara binária (gota em branco)
+x_img = (x_tela - offset_x) / ratio
 
-**Operações sequenciais:**
+y_img = (y_tela - offset_y) / ratio
 
-#### 1. Conversão de Cores
-```
-Gray = BGR → Cinza (canal único)
-Dimensão: HxWx3 → HxW
-```
+com saturacao:
 
-#### 2. Gaussian Blur (Filtro Suavizador)
-```
-Blurred = GaussianBlur(Gray, kernel=5×5, σ=0)
-```
-- **Propósito:** Reduzir ruído de alta frequência
-- **Kernel 5×5:** Cobre área pequena, preserva detalhes da gota
+x_img = clip(x_img, 0, w - 1)
 
-#### 3. Otsu Threshold (Binarização Automática)
-```
-Binary = THRESH_BINARY_INV + OTSU
-Pixel = {
-  255 (branco)  se Gray < limiar_otsu
-  0 (preto)     caso contrário
-}
-```
-- **INV:** Inverte, tornando a gota branca (255)
-- **OTSU:** Calcula limiar automaticamente analisando histograma
-- **Fórmula OTSU:** Maximiza variância entre-classe
+y_img = clip(y_img, 0, h - 1)
 
-#### 4. Morphological Close (Fechamento Morfológico)
-```
-Closed = MORPH_CLOSE(Binary, kernel=5×5, iterações=1)
+### 2.2 Conversao imagem -> tela
+Usada em renderizacao:
 
-Operação: Dilatação → Erosão (ordem importa)
-```
-- **Propósito:** Preencher pequenos buracos na gota
-- **Resultado:** Gota aparece como massa sólida sem furos
+x_tela = x_img * ratio + ox
+
+y_tela = y_img * ratio + oy
+
+### 2.3 Escala de exibicao
+
+SelectionWindow (janela de selecao):
+
+ratio = min(cw / iw, ch / ih)
+
+ContactAngleApp (janela de analise):
+
+ratio = min(cw / iw, ch / ih) * zoom_scale
+
+onde:
+- cw, ch: largura e altura do canvas
+- iw, ih: largura e altura da imagem
 
 ---
 
-### 1.2 - `preprocess.py` (Pipeline Robusto)
+## 3. Pre-processamento (formulas realmente implementadas)
 
-**Objetivo:** Processamento avançado com correção de iluminação não-uniforme
+## 3.1 Caminho principal: filtros.py
 
-**Etapas sequenciais:**
+Arquivo: `processamento_imagem/filtros.py`
 
-#### 1. Gaussian Blur Inicial
-```
-Gray_Blurred = GaussianBlur(Gray, kernel=3×5, σ=0)
-```
+1. Conversao para cinza:
 
-#### 2. Estimação de Fundo (Background Estimation)
-```
-Background = GaussianBlur(Gray, kernel_grande, σ=0)
+Gray = cvtColor(BGR, BGR2GRAY)
 
-kernel_size = max(51, ⌊min(altura, largura) ÷ 6⌋ | 1)
-```
-- **| 1:** Operador bitwise para garantir número ímpar
-- **Objetivo:** Capturar iluminação de fundo
-- **Kernel grande (≥51):** Suavidade extrema, elimina detalhes da gota
+2. Suavizacao Gaussiana:
 
-#### 3. Correção de Iluminação (Divisão)
-```
-Corrected = (Gray + 1) / (Background + 1) × 128
-Corrected_clipped = clip(Corrected, 0, 255)
-```
+Blur = GaussianBlur(Gray, k=(5,5), sigma=0)
 
-**Fórmula matemática:**
-```
-C(x,y) = (I(x,y) + 1) / (B(x,y) + 1) × 128
-```
+3. Binarizacao Otsu invertida:
 
-- **+1:** Evita divisão por zero (proteção numérica)
-- **×128:** Reescala para manter amplitude de valores
-- **Objetivo:** Normalizar variações não-uniformes de iluminação
+Bin = THRESH_BINARY_INV + OTSU(Blur)
 
-#### 4. CLAHE (Contrast Limited Adaptive Histogram Equalization)
-```
-tileGridSize = (min(8, ⌊min(h,w)/50⌋), min(8, ⌊min(h,w)/50⌋))
-clipLimit = 2.0 (padrão)
-Enhanced = CLAHE(Corrected, tileGridSize, clipLimit)
-```
+4. Fechamento morfologico:
 
-**Algoritmo CLAHE:**
-- Divide imagem em N×M blocos (tiles)
-- Para cada tile, calcula histograma
-- Limita altura do histograma a `clipLimit`
-- Redistribui pixels clipped equitativamente
-- Combina tiles com interpolação
+Bin = CLOSE(Bin, kernel_eliptico 5x5, iter=1)
 
-**Resultado:** Contraste aumentado localmente, detalhe fino preservado
+## 3.2 Caminho robusto (fallback): preprocess.py
 
-#### 5. Adaptive Threshold (Limiarização Adaptativa)
-```
-blockSize = max(31, ⌊min(h,w)/30⌋ | 1)
+Arquivo: `processamento_imagem/preprocess.py`
 
-Binary = ADAPTIVE_THRESHOLD_GAUSSIAN_C(
-  Enhanced, 
-  255,
-  blockSize, 
-  C=2
-)
+Observacao de acionamento:
+- Esta rota nao e chamada por falha de contorno.
+- Ela e acionada quando a etapa principal de pre-processamento (`filtros.py`) gera excecao no `try/except` de `main.py`.
 
-Pixel = {
-  255 se Enhanced > (médiaLocal - C)
-  0   caso contrário
-}
-```
+### 3.2.1 Estimativa de fundo
 
-**Proteção de blockSize:**
-```
-max_allowed = max(3, min(h,w) - (1 se min(h,w)%2==0 else 0))
-Se blockSize ≥ min(h,w):
-  blockSize = max_allowed (ajusta para imagem pequena)
-```
+Regra de suavizacao inicial (gray + denoise):
 
-- **GAUSSIAN_C:** Calcula média local com kernel Gaussiano (mais suave)
-- **C=2:** Constante subtraída da média (sensibilidade)
-- **Vantagem:** Robuso a variações de iluminação
+se nm_gauss > 0:
 
-#### 6. Morphological Cleanup
-```
-kernel = MORPH_ELLIPSE(3×3)
-Binary = MORPH_OPEN(Binary, kernel, iterações=1)
-        → Erosão depois Dilatação
-        → Remove ruído pequeno e desconexões
-        
-Binary = MORPH_CLOSE(Binary, kernel, iterações=1)
-        → Dilatação depois Erosão
-        → Preenche buracos
+k = nm_gauss (se impar) senao (nm_gauss + 1)
 
-Resultado: binary é array uint8 (0 ou 255)
-```
+Gray = GaussianBlur(Gray, (k, k), 0)
 
-**Output retornado:**
-```python
-{
-    "enhanced_gray": enhanced,        # Escala cinza melhorada
-    "binary": binary,                 # Máscara 0/255
-    "corrected_bgr": corrected_bgr,   # BGR com valores corrigidos
-    "debug_imgs": {                   # Imagens intermediárias para debug
-        "gray": gray,
-        "bg": bg,
-        "corrected": corrected,
-        "enhanced": enhanced,
-        "binary": binary
-    }
-}
-```
+k_bg = max(51, (min(h,w)//6) | 1)
+
+se bg_ksize for informado:
+
+k_bg = bg_ksize (se impar) senao (bg_ksize + 1)
+
+Background = GaussianBlur(Gray, (k_bg, k_bg), 0)
+
+### 3.2.2 Correcao por divisao
+
+Corrected = ((Gray + 1) / (Background + 1)) * 128
+
+Corrected = clip(Corrected, 0, 255)
+
+### 3.2.3 CLAHE
+
+Se grade nao for informada:
+
+tile = max(1, int(min(h,w)/50))
+
+tileGrid = (min(8, tile), min(8, tile))
+
+Enhanced = CLAHE(Corrected, clipLimit=2.0, tileGridSize=tileGrid)
+
+### 3.2.4 Limiarizacao adaptativa
+
+blockSize = max(31, (min(h,w)//30) | 1)
+
+blockSize impar e estritamente menor que min(h,w)
+
+max_allowed = max(3, min(h,w) - (1 se min(h,w) for par senao 0))
+
+se blockSize >= min(h,w):
+
+blockSize = max_allowed (se impar) senao (max_allowed - 1)
+
+Binary = AdaptiveThresholdGaussian(Enhanced, THRESH_BINARY_INV, blockSize, C=2)
+
+### 3.2.5 Limpeza morfologica
+
+Binary = OPEN(Binary, kernel_eliptico 3x3, iter=1)
+
+Binary = CLOSE(Binary, kernel_eliptico 3x3, iter=1)
 
 ---
 
-## 🔍 2. DETECÇÃO DE CONTORNO {#deteccao-contorno}
+## 4. Deteccao de Contorno (contorno.py)
 
-**Função:** `encontrar_contorno_gota()` em `processamento_imagem/contorno.py`
+Arquivo: `processamento_imagem/contorno.py`
 
-**Objetivo:** Extrair pontos do contorno da gota da máscara binária
+1. Fechamento inicial:
 
-**Algoritmo - Passos sequenciais:**
+Processed = CLOSE(img, kernel 3x3, iter=1)
 
-### Passo 1: Máscara de Segurança (10px)
-```
-Marcar todas as bordas da imagem com 10px de largura como preto (0)
-Objetivo: Gota NÃO pode tocar as extremidades da imagem
-Força gota a "flutuar" dentro da imagem
-```
+2. Mascara de borda preta:
 
-**Código:**
-```python
-h, w = processed.shape[:2]
-cv2.rectangle(processed, (0, 0), (w-1, h-1), 0, thickness=10)
-```
+rectangle(thickness=10) nas bordas da imagem
 
-### Passo 2: Encontrar Contornos Iniciais
-```
-contornos = cv2.findContours(
-  Binary, 
-  mode=RETR_EXTERNAL,        # Apenas contornos externos
-  method=CHAIN_APPROX_NONE   # Todos os pontos (sem compressão)
-)
-```
+3. Extracao de contorno externo:
 
-### Passo 3: Fallback com Canny (se não encontrar contornos)
-```
-Se contornos vazios:
-  edges = Canny(Binary, threshold1=30, threshold2=100)
-  cv2.rectangle(edges, bordas, 10px thickness)  # Reaplica máscara
-  contornos = findContours(edges, ...)
-```
+findContours(Processed, RETR_EXTERNAL, CHAIN_APPROX_NONE)
 
-### Passo 4: Filtro de Contornos na Borda
-```
-Para cada contorno:
-  pts = contorno.reshape(-1, 2)
-  
-  touches_left   = ∃ x ≤ 5
-  touches_right  = ∃ x ≥ w-5
-  touches_top    = ∃ y ≤ 5
-  touches_bottom = ∃ y ≥ h-5
-  
-  border_count = Σ touches
-  
-  Se border_count < 3:
-    contorno_válido ✓
-  Senão:
-    rejeita (é provavelmente a borda da imagem)
-```
+4. Fallback por Canny se vazio:
 
-**Lógica:** Rejeita contornos que tocam 3 ou mais bordas
+Edges = Canny(img, 30, 100)
 
-### Passo 5: Seleção do Maior Contorno
-```
-maior_contorno = max(contornos_válidos, key=área)
-Se área < 100 pixels²:
-  rejeita (muito pequeno, provavelmente ruído)
-```
+5. Filtro topologico por toque em bordas (margem=5):
 
-### Passo 6: Validação Extra (10px Margem)
-```
-Para cada ponto (x, y) do contorno:
-  Válido se: 10 < x < w-10 AND 10 < y < h-10
-  
-Se remover ≥ 10% dos pontos: volta ao original
-Se remover < 10%: mantém pontos filtrados
-```
+touches_left = any(x <= 5)
 
-**Output:**
-```python
-Array Nx2 com [x, y] de cada ponto do contorno
-Exemplo: [[120, 150], [121, 148], [125, 146], ...]
-```
+touches_right = any(x >= w - 5)
+
+touches_top = any(y <= 5)
+
+touches_bottom = any(y >= h - 5)
+
+border_count = touches_left + touches_right + touches_top + touches_bottom
+
+aceita se border_count < 3
+
+6. Filtro de area:
+
+area(contorno) >= 100
+
+7. Filtro final de pontos (margem=10):
+
+10 < x < w-10 e 10 < y < h-10
 
 ---
 
-## 📍 3. LINHA BASE E PONTOS DE CONTATO {#linha-base}
+## 5. Baseline e Contato (linha_base.py)
 
-**Arquivo:** `linha_base/linha_base.py`
+Arquivo: `linha_base/linha_base.py`
 
-### 3.1 - FLOOR-SEEKER (Detecção da Baseline)
+## 5.1 Normalizacao segura de vetor
 
-**Objetivo:** Encontrar a linha base (onde a gota toca a superfície)
+safe_normalize(dx, dy):
 
-**Algoritmo:**
+dist = hypot(dx, dy)
 
-```
-PASSO 1: Encontrar extremos verticais
-         Y_max = máximo Y do contorno (ponto mais baixo)
-         Y_min = mínimo Y do contorno (ponto mais alto)
-         altura_total = Y_max - Y_min
+se dist < 1e-8: retorna (1, 0)
 
-PASSO 2: Encontrar pontos PRÓXIMOS ao piso
-         tolerance = 5.0 pixels
-         floor_pts = pontos onde |Y - Y_max| ≤ 5
-         
-         (Seleciona pontos que tocam a superfície)
+senao: (dx/dist, dy/dist)
 
-PASSO 3: Calcular centro horizontal
-         X0 = média(X dos floor_pts)
+## 5.2 Baseline por FLOOR-SEEKER (codigo atual)
 
-PASSO 4: Definir orientação da linha
-         vx = 1.0, vy = 0.0
-         
-         A baseline é SEMPRE horizontal!
-         (porque é a superfície de repouso)
-```
+1. Piso da gota:
 
-**Fórmula da Baseline:**
-```
-Y_baseline = max(Y_i) para i ∈ contorno_gota
+Y_base = max(Y_contorno)
 
-Linha base = {(x, Y_baseline) : 0 ≤ x ≤ largura_imagem}
-```
+2. Faixa de contato inferior:
 
-**Output Retornado:**
-```python
-{
-    'baseline_y': float,                      # Y_max do contorno
-    'line_params': (vx, vy, x0, y_max),     # (1.0, 0.0, x0, Y_baseline)
-    'method': 'floor_seeker_hybrid'
-}
-```
+floor_pts = {pontos | |Y - Y_base| <= 5}
 
----
+3. Centro horizontal:
 
-### 3.2 - EXTRAPOLAÇÃO POLINOMIAL (Pontos de Contato)
+x0 = media(X_floor_pts)
 
-**Objetivo:** Encontrar os pontos exatos onde a gota toca a baseline
+4. Vetor da baseline:
 
-**Algoritmo:**
+(vx, vy) = (1, 0)
 
-#### Passo 1: Definir Região de Interesse (ROI)
-```
+## 5.3 Extrapolacao polinomial de contato
+
+Constantes atuais:
+- ROI_TOP_EXCLUDE = 0.20
+- ROI_BOTTOM_EXCLUDE = 0.005
+- POLYFIT_DEGREE = 2
+
+1. Altura da gota:
+
 height = Y_max - Y_min
 
-y_roi_top = Y_min + 0.20 × height
-           ↑ Exclui 20% do topo (ponta da gota)
+2. ROI vertical:
 
-y_roi_bottom = Y_max - 0.005 × height
-              ↑ Exclui 0.5% do fundo (artefatos de luz)
+y_roi_top = Y_min + 0.20 * height
 
-mask = (Y ≥ y_roi_top) AND (Y ≤ y_roi_bottom)
-roi_pts = pontos dentro dessa faixa
-```
+y_roi_bottom = Y_max - 0.005 * height
 
-**Visualização:**
-```
-│ ← Y_min
-│
-│ ← y_roi_top (20% abaixo do topo)
-├─────────── ROI (região usada para fit)
-│
-├─────────── y_roi_bottom (0.5% acima do fundo)
-│ ← Y_max (baseline)
-```
+3. Separacao por lados:
 
-#### Passo 2: Separar por Lado
-```
-centro_x = média(X do contorno)
+x_center = media(X_contorno)
 
-esquerda = pontos onde X < centro_x
-direita = pontos onde X ≥ centro_x
-```
+esquerda: X < x_center
 
-#### Passo 3: Polyfit Grau 2 para Cada Lado
-```
-Para lado esquerdo:
-  X = a_esq·Y² + b_esq·Y + c_esq
-  Usar np.polyfit(Y, X, degree=2)
-  
-Para lado direito:
-  X = a_dir·Y² + b_dir·Y + c_dir
-  Usar np.polyfit(Y, X, degree=2)
-```
+direita: X >= x_center
 
-**Por que Y é varável independente?**
-- Y é monotônico (aumenta sempre de cima para baixo)
-- X pode ter múltiplos valores para o mesmo Y (em gotas irregulares)
-- Polyfit com Y independente = função X(Y) bem-definida
+4. Ajuste por lado (X em funcao de Y):
 
-#### Passo 4: Extrapolar para Baseline
-```
-X_contato_esq = P_esq(Y_baseline)
-X_contato_dir = P_dir(Y_baseline)
+X(Y) = aY^2 + bY + c
 
-Onde P_esq e P_dir são os polinômios ajustados
-```
+5. Extrapolacao para baseline:
 
-**Fórmula da extrapolação:**
-```
-P_esq(Y_baseline) = a_esq·Y_baseline² + b_esq·Y_baseline + c_esq
-P_dir(Y_baseline) = a_dir·Y_baseline² + b_dir·Y_baseline + c_dir
-```
+X_contato = X(Y_base)
 
-#### Passo 5: Tratamento de Falhas
-```
-Se polynomfit falhou para esquerda mas direita OK:
-  dist_dir = |P_dir[0] - centro_x|
-  P_esq = [centro_x - dist_dir, Y_baseline]  ← Espelha
+6. Espelhamento se um lado falhar:
 
-Se polynomial fit falhou para direita mas esquerda OK:
-  dist_esq = |P_esq[0] - centro_x|
-  P_dir = [centro_x + dist_esq, Y_baseline]  ← Espelha
+dist = |X_lado_valido - x_center|
 
-Se ambas falharem:
-  → Fallback geométrico simples (extremos da banda inferior)
-```
+X_lado_faltante = x_center +- dist
 
-**Output Retornado:**
-```python
-{
-    'baseline_y': Y_max,
-    'p_esq': [x_esq, Y_baseline],
-    'p_dir': [x_dir, Y_baseline],
-    'line_params': (1.0, 0.0, (x_esq + x_dir)/2, Y_baseline),
-    'contact_method': 'polynomial_extrapolation'
-}
-```
+7. Fallback geometrico final:
+
+near_baseline = {pontos | |Y - Y_base| < 5}
+
+X_esq = min(X_near)
+
+X_dir = max(X_near)
 
 ---
 
-## 📐 4. CÁLCULO DO ÂNGULO DE CONTATO {#calculo-angulo}
+## 6. Calculo do Angulo (angulo_contato.py)
 
-**Arquivo:** `Cal_angulo/angulo_contato.py`
+Arquivo: `Cal_angulo/angulo_contato.py`
 
-### 4.1 - CLASSIFICAÇÃO AUTOMÁTICA DA FORMA
+Funcao principal: `calcular_angulo_circular(...)`
 
-**Objetivo:** Decidir qual método matemático usar
+Observacao de estrategia:
+- Nao existe chaveamento previo por aspect ratio neste modulo.
+- O motor sempre tenta primeiro o ajuste circular.
+- O fallback polinomial e acionado por falha geometrica/numerica (ex.: raio invalido, baseline fora do circulo, erro de solucao).
 
-```
-aspect_ratio = (Y_max - Y_min) / (X_max - X_min)
+## 6.1 Calibracao de baseline
 
-Se aspect_ratio ≥ 0.45:
-  ├─ Gota é REDONDA/ESFÉRICA
-  └─ Usar: CIRCLE FITTING
-  
-Se aspect_ratio < 0.45:
-  ├─ Gota é ACHATADA/APLAINADA
-  └─ Usar: POLYNOMIAL FITTING (grau 3)
-```
+offset_calibracao = 3.0
 
-**Interpretação:**
-- **Aspect ratio 0.45+:** Altura ≥ 45% da largura → gota tem forma próxima circular
-- **Aspect ratio <0.45:** Altura < 45% da largura → gota é achatada/elíptica
+Y_base_ajustada = Y_base + 3.0
 
----
+## 6.2 Janela de pontos para ajuste
 
-### 4.2 - CIRCLE FITTING (para Gotas Redondas)
+mask = (Y < Y_base_ajustada - 3) AND (Y > Y_base_ajustada - 150)
 
-**Método:** Ajuste Algébrico por Mínimos Quadrados
+## 6.3 Selecao por lado
 
-**Objetivo:** Ajustar um círculo que minimize a soma dos quadrados dos erros
+x_center_aprox = (p_esq.x + p_dir.x) / 2
 
-#### Equação do Círculo
-```
-(x - xc)² + (y - yc)² = r²
-```
+lado esquerdo: X < x_center_aprox
 
-#### Expansão Algébrica
-```
-x² - 2xc·x + xc² + y² - 2yc·y + yc² = r²
-x² + y² - 2xc·x - 2yc·y + (xc² + yc² - r²) = 0
-```
+lado direito: X > x_center_aprox
 
-#### Sistema Linear
-```
-Para cada ponto (x_i, y_i):
-[x_i² + y_i², x_i, y_i, 1] · [c, a, b, d] = 0
+## 6.4 Centralizacao dos pontos
 
-Onde:
-a = -2xc
-b = -2yc
-c = xc² + yc² - r²
-d = -1
-```
+mean_xy = media(local_pts)
 
-#### Resolução
-```python
-A = np.column_stack([x² + y², x, y, ones])
-params = np.linalg.lstsq(A, zeros)
-c, a, b, d = params
+pontos_centered = local_pts - mean_xy
 
-xc = -a / 2
-yc = -b / 2
-r = √(xc² + yc² - c)
-```
+## 6.5 Ajuste circular algebrico de Kasa
 
-**Vantagens:**
-- ✅ Não depende de bibliotecas externas (scipy)
-- ✅ Método puramente algébrico e determinístico
-- ✅ Mais rápido que otimização iterativa
-- ✅ Sempre converge para uma solução
-```
-cx ∈ [cx_init - 100, cx_init + 100]
-cy ∈ [cy_init - 100, cy_init + 100]
-r ∈ [1, 1000]
+Funcao: `ajustar_circulo_algebrico(pontos)`
 
-max_nfev: 10000 iterações máximo
-```
+Metodo computacional no codigo atual:
+- Resolucao direta do sistema linear dos momentos com `np.linalg.solve` (matriz 2x2), nao `np.linalg.lstsq`.
 
-**Output:** Centro (cx, cy) e raio r ajustados
+Dados:
 
----
+x = pontos[:,0], y = pontos[:,1]
 
-### 4.3 - VETOR TANGENTE (Circle Fitting)
+xm = media(x), ym = media(y)
 
-**Objetivo:** Encontrar a direção tangente na gota (reta que toca sem cortar)
+u = x - xm, v = y - ym
 
-#### Passo 1: Calcular Vetor Raio
-```
-p_contato = (X_contato, Y_contato)
-p_centro = (cx, cy)
+Somas:
 
-raio_vetor = p_contato - p_centro
-           = (X_contato - cx, Y_contato - cy)
-           = (rx, ry)
-```
+Suu = soma(u^2)
 
-#### Passo 2: Perpendiculares ao Raio (Rotação 90°)
-```
-Rotação 90° no sentido anti-horário:
-  t1 = (-ry, rx)
+Svv = soma(v^2)
 
-Rotação 90° no sentido horário:
-  t2 = (ry, -rx)
+Suv = soma(u*v)
 
-Ambos são perpendiculares ao raio!
-```
+Suuu = soma(u^3)
 
-#### Passo 3: Escolher Vetor que Aponta para CIMA
-```
-Se vy < 0 (aponta para cima):
-  vt = t1 ou t2 (conforme vy < 0)
-Senão:
-  Fallback → ângulo exato 90°
-```
+Svvv = soma(v^3)
 
-**Lógica:** A tangente deve "sair" da gota para cima (em direção ao ar)
+Suvv = soma(u*v^2)
 
-#### Passo 4: Normalizar
-```
-|vt| = √(vt_x² + vt_y²)
+Suuv = soma(u^2*v)
 
-Se |vt| < 1e-6:
-  retorna erro (proteção contra vetor nulo)
-  
-vt_normalizado = vt / |vt|
-                ↑ Agora |vt_normalizado| = 1
-```
+Sistema linear:
 
-**Resultado:** Vetor unitário (comprimento 1) apontando para cima
+A = [[Suu, Suv], [Suv, Svv]]
 
----
+B = [(Suuu + Suvv)/2, (Svvv + Suuv)/2]
 
-### 4.4 - POLYNOMIAL FITTING (para Gotas Achatadas) 
+[uc, vc] = solve(A, B)
 
-**Objetivo:** Encontrar tangente polinomialmente
+Se A for singular (LinAlgError), o metodo retorna (0,0,0), o que dispara fallback angular.
 
-#### Passo 1: Translação de Coordenadas
-```
-Mover origem para ponto de contato:
-  y_local = Y - Y_contato
-  x_local = X - X_contato
+Centro global:
 
-Motivo: Simplifica cálculo da derivada em y=0
-```
+xc = xm + uc
 
-#### Passo 2: Polyfit Grau 3
-```
-Ajustar: X_local = a·y_local³ + b·y_local² + c·y_local + d
+yc = ym + vc
 
-coeffs = np.polyfit(y_local, x_local, degree=3)
-coeffs = [a, b, c, d]
-```
+Raio:
 
-**Por que grau 3?**
-- Grau 2 (parábola) muito simples para gotas irregulares
-- Grau 3 (cúbica) captura curvatura variável
-- Grau 4+ pode overfitting (oscilações indesejadas)
+R = media( sqrt((x - xc)^2 + (y - yc)^2) )
 
-#### Passo 3: Calcular Derivada em y=0
-```
-Se X_local = a·y³ + b·y² + c·y + d
+Reconversao no fluxo da funcao principal (apos o ajuste final com pontos centrados):
 
-Então: dX/dY = 3a·y² + 2b·y + c
+xc_global = xc + mean_xy[0]
 
-Em y=0:
-  (dX/dY)|_{y=0} = c
+yc_global = yc + mean_xy[1]
 
-Onde c é o TERCEIRO coeficiente (índice 2)
-```
+Obs.: esta etapa aparece em `calcular_angulo_circular` depois do segundo ajuste circular,
+para voltar de coordenadas centradas para coordenadas globais da imagem.
 
-**Fórmula:**
-```
-dX/dY|_{y=0} = coeffs[2]
-```
+## 6.6 Filtro de outliers por sigma
 
-#### Passo 4: Definir Vetor Tangente
-```
-Se dX/dY = c, então para deslocamento unitário em Y:
-  
-  Quando Y diminui 1 (dy = -1, para cima):
-    X muda de aproximadamente -c
-    t1 = (-c, -1)
-  
-  Quando Y aumenta 1 (dy = +1, para baixo):
-    X muda de aproximadamente c
-    t2 = (c, 1)
+Nota importante:
+- xc0, yc0 e as distancias abaixo sao calculados no espaco centrado
+	(`local_pts_centered`), nao nas coordenadas originais da imagem.
 
-Escolher t que aponta para CIMA (t_y < 0):
-  Se t1_y < 0: vt = t1
-  Elif t2_y < 0: vt = t2
-  Else: fallback com vt = (-c, -1)
-```
+d_i = hypot(local_pts_centered[i,0] - xc0, local_pts_centered[i,1] - yc0)
 
-#### Passo 5: Normalizar
-```
-|vt| = √(vt_x² + vt_y²)
+residuals_i = |d_i - R0|
 
-vt_normalizado = vt / |vt|
-```
+sigma = std(residuals)
+
+inlier se residuals_i <= 2*sigma
+
+Resultado:
+- local_pts_filtered = subconjunto de `local_pts_centered` (ainda em espaco centrado).
+
+## 6.7 Intersecao circulo-reta baseline (sub-pixel)
+
+Com baseline horizontal em Y_base_ajustada:
+
+dy = Y_base_ajustada - yc
+
+condicao de existencia: |dy| < R
+
+se |dy| >= R: baseline fora do circulo -> fallback polinomial
+
+dx = sqrt(max(0, R^2 - dy^2))
+
+x_contato = xc - dx (esq) ou xc + dx (dir)
+
+## 6.8 Inclinacao da tangente por derivada implicita
+
+Da equacao do circulo, inclinacao local da tangente no contato:
+
+m_tangente = -(x_contato - xc) / (Y_base_ajustada - yc)
+
+Se denominador = 0: theta = 90 graus
+
+Senao:
+
+theta = atan(|m_tangente|)
+
+theta_graus = degrees(theta)
+
+## 6.9 Ajuste de quadrante hidrofobico
+
+se yc > Y_base_ajustada:
+
+theta_graus = 180 - theta_graus
+
+Resultado final:
+
+theta = clip(theta_graus, 0, 180)
+
+## 6.10 Fallback polinomial angular
+
+Funcao: `_calcular_angulo_polynomial_fallback`
+
+Importante:
+- `local_pts` no fallback esta em coordenadas originais da imagem
+	(nao centradas).
+- O fallback recebe `local_pts`, e nao `local_pts_centered`.
+
+1. Ajuste:
+
+X(Y) = aY^2 + bY + c
+
+2. Derivada:
+
+dX/dY = 2a*Y_base + b
+
+Observacao de consistencia:
+- A derivada no fallback usa `baseline_y` (Y_base bruto), nao `Y_base_ajustada`.
+- Isso significa que os pontos sao selecionados com janela baseada em `Y_base_ajustada`,
+	mas a derivada e avaliada em `Y_base`.
+
+3. Conversao para angulo:
+
+theta = atan(1 / (dX/dY))  (ou 90 graus se derivada zero)
+
+4. Ajuste por lado:
+- lado esq: se theta<0, soma 180
+- lado dir: se theta>0, theta=180-theta; senao usa |theta|
+
+5. Saturacao final: [0, 180]
 
 ---
 
-### 4.5 - FILTRO ANTI-REFLEXO
+## 7. Visualizacao Matematica (desenho.py)
 
-**Problema:** Reflexos aparecem muito perto da baseline (~1-2px acima)
+Arquivo: `visualizacao/desenho.py`
 
-**Solução:**
-```
-artifact_margin = 2 pixels (distância mínima da baseline)
-window_height = 60 pixels (altura da janela de análise)
+## 7.1 Baseline na tela
 
-mask = (Y ≤ Y_contato - artifact_margin) AND 
-       (Y > Y_contato - window_height)
+y_scr = baseline_y * ratio + offset_y
 
-local_pts = pontos dentro dessa faixa
+x_start = offset_x
 
-Rejeita se: len(local_pts) < 5 pontos
-```
+x_end = offset_x + image_width * ratio
 
-**Visualização:**
-```
-│ Y_contato - 60  ← Topo da janela
-│                    (60px acima da baseline)
-├─────────────── Pontos usados ✓
-│
-├─────────────── Y_contato - 2  (artifact_margin)
-│ Y_contato ← Baseline (reflexos ignorados)
-```
+## 7.2 Tangentes desenhadas
 
----
+length = 50 / zoom_scale
 
-### 4.6 - CÁLCULO FINAL DO ÂNGULO
+Para esquerda:
 
-#### Passo 1: Definir Vetor Baseline
-```
-A baseline é sempre horizontal (reta em repouso)
+angle = radians(ae)
 
-Se lado = "esquerdo":
-  vb = (1.0, 0.0)    ← Aponta para DIREITA
-  
-Se lado = "direito":
-  vb = (-1.0, 0.0)   ← Aponta para ESQUERDA
-  
-Motivo: Ângulo é sempre medido ENTRE a tangente
-        e a baseline (piso)
-```
+dx = length * cos(angle)
 
-#### Passo 2: Produto Escalar (Dot Product)
-```
-dot = vt.x × vb.x + vt.y × vb.y
-    = vt.x × vb.x + vt.y × 0
-    = vt.x × vb.x
+dy = -length * sin(angle)
 
-dot = clip(dot, -1.0, 1.0)  ← Proteção numérica
-                              (valores fora [-1,1] causam erro em arccos)
-```
+Para direita:
 
-#### Passo 3: Arco-Cosseno
-```
-θ_radianos = arccos(dot)
+angle = radians(ad)
 
-Intervalo: arccos retorna [0, π] radianos
-           = [0, 180] graus
-```
+dx = -length * cos(angle)
 
-#### Passo 4: Converter para Graus
-```
-θ_graus = θ_radianos × (180/π)
+dy = -length * sin(angle)
 
-θ_graus = clip(θ_graus, 0, 180)  ← Proteção se ultrapassar limites
-```
+Projecao visual com origem deslocada 20% para baixo:
 
-**Fórmula Completa:**
-```
-θ = arccos(v̂_t · v̂_b) × (180/π)
+P1 = (x - 0.2*dx, y - 0.2*dy)
 
-Onde:
-  v̂_t  = vetor tangente normalizado (de Circle ou Polynomial Fitting)
-  v̂_b  = vetor baseline (1,0) ou (-1,0)
-  ·    = produto escalar
-```
+P2 = (x + dx, y + dy)
 
 ---
 
-### 4.7 - NOVA FÓRMULA TRIGONOMÉTRICA (Circle Fitting)
+## 8. Resumo Unico de Formulas em Uso
 
-#### Distância Vertical
-```
-h = |yc - baseline_y|
-```
-Onde `yc` é a coordenada Y do centro do círculo ajustado
-
-#### Ângulo Trigonométrico
-```
-cos(β) = h / R
-β = arccos(h / R)
-
-Onde:
-- h = distância vertical do centro à baseline
-- R = raio do círculo ajustado
-- β = ângulo entre raio e vertical
-```
-
-#### Lógica Baseada na Posição do Centro
-```python
-if yc > baseline_y:
-    # Centro ABAIXO da baseline (gota hidrofóbica)
-    # Ângulo suplementar: θ = 180° - β
-    theta_deg = 180.0 - math.degrees(angulo_rad)
-else:
-    # Centro ACIMA da baseline (gota hidrofílica)  
-    # Ângulo direto: θ = β
-    theta_deg = math.degrees(angulo_rad)
-```
-
-#### Interpretação Física
-- **yc > baseline_y**: Centro do círculo está abaixo da superfície
-  - Gota "gordinha" (hidrofóbica)
-  - Ângulo > 90°
-  - θ = 180° - β
-
-- **yc < baseline_y**: Centro do círculo está acima da superfície
-  - Gota "achatada" (hidrofílica)  
-  - Ângulo < 90°
-  - θ = β
-
-**Fórmula Final:**
-```
-θ = arccos(h/R) se yc < baseline_y
-θ = 180° - arccos(h/R) se yc > baseline_y
-```
+1. SelectionWindow: ratio = min(cw/iw, ch/ih); ContactAngleApp: ratio = min(cw/iw, ch/ih) * zoom_scale
+2. x_img = (x_tela - offset_x)/ratio, y_img = (y_tela - offset_y)/ratio
+3. Otsu invertido: THRESH_BINARY_INV + OTSU
+4. Corrected = ((Gray+1)/(Background+1))*128
+5. k_bg = max(51, (min(h,w)//6)|1)
+6. tile = max(1, int(min(h,w)/50)); tileGrid = (min(8,tile), min(8,tile))
+7. blockSize = max(31, (min(h,w)//30)|1)
+8. Y_base = max(Y_contorno)
+9. floor_pts: |Y - Y_base| <= 5
+10. y_roi_top = Y_min + 0.20*height
+11. y_roi_bottom = Y_max - 0.005*height
+12. X(Y) = aY^2 + bY + c
+13. safe_normalize: (dx,dy)/hypot(dx,dy)
+14. Y_base_ajustada = Y_base + 3.0
+15. Kasa: solve(A,B) com A=[[Suu,Suv],[Suv,Svv]]
+16. R = media(sqrt((x-xc)^2+(y-yc)^2))
+17. inlier: residual <= 2*sigma
+18. dx = sqrt(max(0, R^2 - dy^2)), dy = Y_base_ajustada - yc
+19. m_tangente = -(x_contato-xc)/(Y_base_ajustada-yc)
+20. theta = degrees(atan(|m_tangente|))
+21. se yc > Y_base_ajustada: theta = 180 - theta
+22. fallback: dX/dY = 2a*Y_base + b; theta = atan(1/(dX/dY))
+23. tangente visual: dx = +/-length*cos(theta), dy = -length*sin(theta)
+24. criterio fallback circular: (R <= 0) ou (|Y_base_ajustada - yc| >= R) ou erro de solve/ajuste
 
 ---
-
-## 🎨 5. VISUALIZAÇÃO {#visualizacao}
-
-**Arquivo:** `visualizacao/desenho.py`
-
-### Elementos Desenhados
-
-#### 1. Baseline (Vermelho)
-```
-Desenha linha horizontal na altura Y = baseline_y
-
-Código:
-  y_scr = (baseline_y × ratio) + offset_y
-  canvas.create_line(x_start, y_scr, x_end, y_scr, 
-                     fill="red", width=2)
-
-Onde:
-  ratio = fator de zoom da imagem
-  offset_y = deslocamento vertical (pan)
-```
-
-#### 2. Contorno da Gota (Cyan)
-```
-Desenha sequência conectada de pontos: gota_pts
-
-Código:
-  para cada ponto (x, y) em gota_pts:
-    converter para tela: (x_scr, y_scr) = to_scr(x, y)
-    desenhar linha conectando pontos vizinhos
-  
-  canvas.create_line(..., fill="cyan", width=1)
-```
-
-#### 3. Pontos de Contato (Amarelo)
-```
-Desenha círculos pequenos em p_esq (esquerdo) e p_dir (direito)
-
-Código:
-  raio = 5 pixels
-  para cada ponto:
-    (x_scr, y_scr) = to_scr(p[0], p[1])
-    canvas.create_oval(x_scr-r, y_scr-r, x_scr+r, y_scr+r,
-                       fill="yellow", outline="black")
-```
-
-#### 4. Tangentes (Verde)
-```
-Desenha linhas retas nos ângulos calculados
-
-Cálculo:
-  length = 40 / zoom_scale  ← Comprimento em pixels de imagem
-  
-  angle_rad = ângulo × π/180  ← Converter graus para radianos
-  
-  dx = length × cos(angle_rad)
-  dy = length × sin(angle_rad)
-  
-  Ponto inicial: (x - dx, y - dy)
-  Ponto final:   (x + dx, y + dy)
-  
-  canvas.create_line(x1_scr, y1_scr, x2_scr, y2_scr,
-                     fill="green", width=2)
-```
-
----
-
-## 📊 RESUMO DAS FÓRMULAS PRINCIPAIS {#resumo-formulas}
-
-### Tabela de Fórmulas por Módulo
-
-| Módulo | Fórmula | Variáveis | Propósito |
-|--------|---------|-----------|----------|
-| **Filtros** | OTSU: threshold automático | Gray, limiar | Binarização automática |
-| **Preprocess** | C = (I+1)/(B+1)×128 | I=intensity, B=background | Normalizar iluminação |
-| **Preprocess** | Enhanced = CLAHE(C) | tileGrid, clipLimit | Aumentar contraste local |
-| **Preprocess** | B = AdaptiveThreshold(E, blockSize) | E=enhanced | Limiarizar adaptativo |
-| **Linha Base** | Y_base = max(Y_gota) | Y=altura | Encontrar piso |
-| **Contato** | X = aY² + bY + c | a,b,c = coeficientes | Extrapolar contato |
-| **Contato X(Y)** | X(Y_base) = aY_base²+bY_base+c | Y_base=baseline | Ponto de contato |
-| **Círculo** | (x-xc)² + (y-yc)² = r² | xc,yc,r = centro/raio | Ajustar círculo |
-| **Ângulo (Novo)** | θ = arccos(h/r) | h=\|yc-baseline\| | Ângulo trigonométrico |
-| **Ângulo (Antigo)** | θ = arccos(v_t·v_b)×180/π | v_t,v_b = vetores | Produto escalar |
-| **Visualização** | (x_scr, y_scr) = (x×ratio+off_x, y×ratio+off_y) | ratio,off = zoom,pan | Converter imagem→tela |
-
----
-
-## 🔗 FLUXO OPERACIONAL COMPLETO
-
-```
-┌─────────────────────┐
-│  ENTRADA: Imagem    │
-│  (Câmera/Arquivo)   │
-└──────────┬──────────┘
-           │
-           ▼
-   ┌───────────────────┐
-   │ PROCESSAMENTO     │
-   │ - Gaussian Blur   │
-   │ - CLAHE           │
-   │ - Threshold       │
-   │ - Morphology      │
-   └────────┬──────────┘
-            │
-            ▼
-   ┌──────────────────────┐
-   │ DETECÇÃO CONTORNO    │
-   │ - FindContours       │
-   │ - Filtro bordas      │
-   │ - Validação pontos   │
-   └──────────┬───────────┘
-              │
-              ▼
-   ┌──────────────────────┐
-   │ LINHA BASE           │
-   │ - Floor-Seeker       │
-   │ - Y_max = baseline   │
-   └──────────┬───────────┘
-              │
-              ▼
-   ┌──────────────────────┐
-   │ PONTOS DE CONTATO    │
-   │ - Polyfit grau 2     │
-   │ - Extrapola em Y_max │
-   │ - P_esq, P_dir       │
-   └──────────┬───────────┘
-              │
-              ▼
-   ┌──────────────────────┐
-   │ CLASSIFICAR FORMA    │
-   │ aspect_ratio = h/w   │
-   │ ≥0.45? Circ : Poly   │
-   └──────────┬───────────┘
-              │
-              ├─── Circle Fitting ───┐
-              │                       │
-              ▼                       ▼
-   ┌──────────────────────────────────────────┐
-   │ Ajustar Círculo (least_squares)           │
-   │ min Σ(√[(x-cx)²+(y-cy)²] - r)²          │
-   │ → Resultado: (cx, cy, r)                 │
-   └────────┬─────────────────────────────────┘
-            │
-            ▼
-   ┌──────────────────────────────────────────┐
-   │ Vetor Tangente = Perpendicular ao Raio   │
-   │ t = (-ry, rx), normalizar, escolher ↑   │
-   └────────┬─────────────────────────────────┘
-            │
-            └─── Polynomial Fitting ──┐
-                                       │
-   ┌──────────────────────────────────▼────────┐
-   │ Ajustar Polinômio Grau 3                  │
-   │ X_local = a·y³ + b·y² + c·y + d          │
-   │ → dX/dY|_{y=0} = c                      │
-   │ → Resultado: vetor tangente (-c, -1)     │
-   └────────┬────────────────────────────────┘
-            │
-            ▼
-   ┌──────────────────────────────────────────┐
-   │ CÁLCULO DO ÂNGULO                         │
-   │ dot = v_t · v_b                          │
-   │ θ = arccos(dot) × 180/π                  │
-   │ θ = clip(θ, 0, 180)                      │
-   └──────────┬────────────────────────────────┘
-              │
-              ▼
-   ┌──────────────────────────────────────────┐
-   │ VISUALIZAÇÃO                              │
-   │ - Desenha baseline (vermelho)             │
-   │ - Desenha contorno (cyan)                 │
-   │ - Desenha pontos contato (amarelo)        │
-   │ - Desenha tangentes (verde)               │
-   │ - Mostra ângulo no gráfico                │
-   └────────┬────────────────────────────────┘
-            │
-            ▼
-   ┌──────────────────────┐
-   │ SAÍDA: Ângulo (°)   │
-   │ Esquerdo e Direito   │
-   └──────────────────────┘
-```
-
----
-
-## 📝 NOTAS TÉCNICAS IMPORTANTES
-
-### 1. Proteções Numéricas
-- Sempre usar `clip()` antes de `arccos()` para evitar domínio inválido
-- Adicionar +1 em divisões para evitar divisão por zero
-- Usar `if dist < 1e-6` para vetores quase-nulos
-
-### 2. Ordem de Operações Morfológicas
-- **CLOSE:** Dilatação DEPOIS Erosão (preenche buracos)
-- **OPEN:** Erosão DEPOIS Dilatação (remove ruído)
-- Ordem importa! Invertida tem efeito oposto
-
-### 3. Translação de Coordenadas
-- Usar origem local (ponto de contato = 0,0) para simplificar derivadas
-- Reaplicar offset para converter para coordenadas globais
-
-### 4. Escolha Circle vs Polynomial
-- **Circle:** Melhor para gotas 3D redondas (hidrofóbicas)
-- **Polynomial:** Melhor para gotas 2D achatadas (hidrofílicas)
-- Transição em aspect_ratio = 0.45 (altura = 45% da largura)
-
-### 5. Extrapolação Polinomial
-- Y deve ser variável independente (monotônico)
-- X como dependente (pode ter múltiplos valores por Y)
-- Extrapola apenas até Y_baseline (não além)
-
----
-
-## 🎯 CONCLUSÃO
-
-Este sistema implementa uma **análise científica completa** de ângulo de contato usando:
-
-1. **Processamento robusto** com correção de iluminação
-2. **Detecção precisa** de contorno com validações
-3. **Métodos híbridos** (Circle + Polynomial) adaptados à forma
-4. **Cálculos precisos** com proteções numéricas
-5. **Visualização interativa** para validação manual
-
-As fórmulas matemáticas garantem **precisão sub-pixel** e **robustez** a variações de imagem.
-
----
-
-**Fim da Documentação**  
-*Gerado em: 23 de março de 2026*

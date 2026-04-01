@@ -42,9 +42,13 @@
 |---|---|---|
 | `dist = hypot(dx, dy)` | `linha_base.py` | Norma do vetor para normalizacao |
 | `v_norm = (dx/dist, dy/dist)` se `dist >= eps`, senao `(1, 0)` | `linha_base.py` | Normalizacao segura |
-| `Y_baseline = max(Y_i)` | `linha_base.py` | Floor-seeker da baseline |
-| `floor_pts: abs(Y_i - Y_baseline) <= 5` | `linha_base.py` | Selecao de pontos proximos ao piso |
-| `x0 = mean(X_floor)` | `linha_base.py` | Centro horizontal da faixa de contato |
+| `q = clip(1 - clip(BASELINE_BOTTOM_FRACTION, 0.02, 0.5), 0, 1)` | `linha_base.py` | Quantil para selecionar faixa inferior |
+| `floor_pts: Y_i >= quantile(Y, q)` | `linha_base.py` | Selecao dos pontos candidatos ao piso |
+| `(vx, vy, x0, y0) = fitLine(floor_pts)` | `linha_base.py` | Ajuste TLS robusto da linha base |
+| `d_i = abs(vy*(x_i-x0) - vx*(y_i-y0)) / hypot(vx, vy)` | `linha_base.py` | Distancia perpendicular ponto-reta |
+| `MAD = median(abs(d - median(d)))` | `linha_base.py` | Escala robusta para poda de outliers |
+| `limiar = max(BASELINE_INLIER_MIN_PIXELS, BASELINE_INLIER_MAD_SCALE * 1.4826 * MAD)` | `linha_base.py` | Regra de inliers robusta |
+| `Y_baseline = quantile(Y_inliers, 0.90)` | `linha_base.py` | Baseline final robusta |
 | `y_roi_bottom = y_max - roi_bottom * altura` | `linha_base.py` | Limite inferior da ROI |
 | `y_roi_top = y_min + roi_top * altura` | `linha_base.py` | Limite superior da ROI |
 | `x_center = mean(X_contorno)` | `linha_base.py` | Separacao esquerda/direita |
@@ -69,12 +73,14 @@
 | `R = mean(sqrt((x - xc)^2 + (y - yc)^2))` | `angulo_contato.py` | Raio medio fisico |
 | `dx_dy = 2*a*baseline_y + b` | `angulo_contato.py` | Derivada do fallback polinomial |
 | `theta = atan(1/dx_dy)` (ou `pi/2` se `dx_dy = 0`) | `angulo_contato.py` | Angulo no fallback |
-| `baseline_ajustada = baseline_y + 3` | `angulo_contato.py` | Compensacao de calibracao |
-| `mask = (Y < baseline_ajustada - 3) AND (Y > baseline_ajustada - 150)` | `angulo_contato.py` | Janela local de ajuste |
+| `offset = clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota, ANGLE_BASELINE_OFFSET_MIN, ANGLE_BASELINE_OFFSET_MAX)` | `angulo_contato.py` | Calibracao adaptativa da baseline |
+| `baseline_ajustada = baseline_y + offset` | `angulo_contato.py` | Baseline ajustada dinamicamente |
+| `window_height = clip(ANGLE_WINDOW_HEIGHT_FACTOR * altura_gota, ANGLE_WINDOW_HEIGHT_MIN, ANGLE_WINDOW_HEIGHT_MAX)` | `angulo_contato.py` | Altura dinamica da janela de ajuste |
+| `mask = (Y < baseline_ajustada - 3) AND (Y > baseline_ajustada - window_height)` | `angulo_contato.py` | Janela local adaptativa |
 | `center_x_approx = (x_esq + x_dir)/2` | `angulo_contato.py` | Separacao por lado |
 | `dist_i = hypot(x_i - xc0, y_i - yc0)` | `angulo_contato.py` | Distancia radial para residuos |
 | `residual_i = abs(dist_i - R0)` | `angulo_contato.py` | Erro radial |
-| `inlier se residual_i <= 2*sigma` | `angulo_contato.py` | Filtro sigma |
+| `inlier se residual_i <= ANGLE_OUTLIER_SIGMA_SCALE * sigma` | `angulo_contato.py` | Filtro sigma parametrico |
 | `dy = baseline_ajustada - yc` | `angulo_contato.py` | Distancia vertical baseline-centro |
 | `dx = sqrt(max(0, R^2 - dy^2))` | `angulo_contato.py` | Intersecao circulo-reta |
 | `x_contato = xc - dx` (esq) ou `xc + dx` (dir) | `angulo_contato.py` | Contato sub-pixel |

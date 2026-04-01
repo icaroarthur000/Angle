@@ -1,6 +1,19 @@
-from typing import Union, Tuple
+from typing import Union, Tuple, Dict
 import numpy as np
 import math
+from parametros import obter
+
+
+ANGLE_BASELINE_OFFSET_FACTOR = float(obter("angle_baseline_offset_factor", 0.01))
+ANGLE_BASELINE_OFFSET_MIN = float(obter("angle_baseline_offset_min", 1.5))
+ANGLE_BASELINE_OFFSET_MAX = float(obter("angle_baseline_offset_max", 4.0))
+ANGLE_WINDOW_HEIGHT_FACTOR = float(obter("angle_window_height_factor", 0.55))
+ANGLE_WINDOW_HEIGHT_MIN = int(obter("angle_window_height_min", 70))
+ANGLE_WINDOW_HEIGHT_MAX = int(obter("angle_window_height_max", 220))
+ANGLE_OUTLIER_SIGMA_SCALE = float(obter("angle_outlier_sigma_scale", 2.0))
+QUALITY_RMSE_REF_PX = float(obter("quality_rmse_ref_px", 3.0))
+QUALITY_MIN_SCORE = float(obter("quality_min_score", 0.0))
+QUALITY_MAX_SCORE = float(obter("quality_max_score", 1.0))
 
 
 def ajustar_circulo_algebrico(pontos: np.ndarray) -> Tuple[float, float, float]:
@@ -80,6 +93,65 @@ def _calcular_angulo_polynomial_fallback(local_pts: np.ndarray, baseline_y: floa
     return float(np.clip(theta_deg, 0.0, 180.0))
 
 
+def _selecionar_pontos_lado(
+    gota_pts: np.ndarray,
+    p_esq: Union[list, tuple],
+    p_dir: Union[list, tuple],
+    baseline_ajustada: float,
+    lado: str,
+) -> np.ndarray:
+    altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1])) if len(gota_pts) > 0 else 100.0
+    window_height = int(np.clip(ANGLE_WINDOW_HEIGHT_FACTOR * altura_gota, ANGLE_WINDOW_HEIGHT_MIN, ANGLE_WINDOW_HEIGHT_MAX))
+    mask = (gota_pts[:, 1] < baseline_ajustada - 3) & (gota_pts[:, 1] > baseline_ajustada - window_height)
+    local_pts = gota_pts[mask]
+    center_x_approx = (p_esq[0] + p_dir[0]) / 2
+    if lado == "esq":
+        return local_pts[local_pts[:, 0] < center_x_approx]
+    return local_pts[local_pts[:, 0] > center_x_approx]
+
+
+def calcular_qualidade_dinamica(
+    gota_pts: np.ndarray,
+    p_esq: Union[list, tuple],
+    p_dir: Union[list, tuple],
+    baseline_y: float,
+) -> Dict[str, float]:
+    """Calcula qualidade [0,1] baseada no RMSE do ajuste circular para ambos os lados."""
+    if gota_pts is None or len(gota_pts) < 8 or p_esq is None or p_dir is None:
+        return {"score": 0.0, "rmse_px": 999.0, "n_pts": 0.0}
+
+    altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1])) if len(gota_pts) > 0 else 100.0
+    offset = float(np.clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota, ANGLE_BASELINE_OFFSET_MIN, ANGLE_BASELINE_OFFSET_MAX))
+    baseline_ajustada = baseline_y + offset
+
+    rmses = []
+    total_pts = 0
+    for lado in ("esq", "dir"):
+        local_pts = _selecionar_pontos_lado(gota_pts, p_esq, p_dir, baseline_ajustada, lado)
+        if len(local_pts) < 4:
+            continue
+        total_pts += int(len(local_pts))
+        try:
+            xc, yc, R = ajustar_circulo_algebrico(local_pts)
+            if not np.isfinite(R) or R <= 0:
+                continue
+            d = np.hypot(local_pts[:, 0] - xc, local_pts[:, 1] - yc)
+            rmse = float(np.sqrt(np.mean((d - R) ** 2)))
+            if np.isfinite(rmse):
+                rmses.append(rmse)
+        except Exception:
+            continue
+
+    if not rmses:
+        return {"score": 0.0, "rmse_px": 999.0, "n_pts": float(total_pts)}
+
+    rmse_medio = float(np.mean(rmses))
+    # Mapeamento exponencial: rmse baixo -> score alto
+    score = float(np.exp(-rmse_medio / max(1e-6, QUALITY_RMSE_REF_PX)))
+    score = float(np.clip(score, QUALITY_MIN_SCORE, QUALITY_MAX_SCORE))
+    return {"score": score, "rmse_px": rmse_medio, "n_pts": float(total_pts)}
+
+
 def calcular_angulo_circular(
     gota_pts: np.ndarray,
     p_esq: Union[list, tuple],
@@ -95,24 +167,13 @@ def calcular_angulo_circular(
     if lado not in ("esq", "dir"):
         return 0.0
     
-    # --- PULO DO GATO: CALIBRAÇÃO DE BASELINE ---
-    # Compensa a espessura da linha preta da imagem (+3 pixels para baixo)
-    offset_calibracao = 3.0
+    # --- CALIBRAÇÃO ADAPTATIVA DE BASELINE ---
+    altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1])) if len(gota_pts) > 0 else 100.0
+    offset_calibracao = float(np.clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota, ANGLE_BASELINE_OFFSET_MIN, ANGLE_BASELINE_OFFSET_MAX))
     baseline_ajustada = baseline_y + offset_calibracao
 
     # Janela de análise com base na linha ajustada
-    window_height = 150
-    mask = (gota_pts[:, 1] < baseline_ajustada - 3) & \
-           (gota_pts[:, 1] > baseline_ajustada - window_height)
-
-    local_pts = gota_pts[mask]
-
-    # Refinar para borda externa (lado)
-    center_x_approx = (p_esq[0] + p_dir[0]) / 2
-    if lado == "esq":
-        local_pts = local_pts[local_pts[:, 0] < center_x_approx]
-    else:
-        local_pts = local_pts[local_pts[:, 0] > center_x_approx]
+    local_pts = _selecionar_pontos_lado(gota_pts, p_esq, p_dir, baseline_ajustada, lado)
 
     if len(local_pts) < 3:
         return 0.0
@@ -132,7 +193,7 @@ def calcular_angulo_circular(
     sigma = np.std(residuals)
 
     if sigma > 0:
-        inliers = residuals <= (2.0 * sigma)
+        inliers = residuals <= (ANGLE_OUTLIER_SIGMA_SCALE * sigma)
         local_pts_filtered = local_pts_centered[inliers]
     else:
         local_pts_filtered = local_pts_centered

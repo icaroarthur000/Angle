@@ -63,7 +63,7 @@ $$
 
 ## 3. Pre-processamento de Imagem
 
-### 3.1 Caminho principal (filtros.py)
+### 3.1 Caminho principal — OTSU (filtros.py: `aplicar_filtro_binary_otsu`)
 
 1) Conversao para cinza:
 
@@ -87,6 +87,60 @@ $$
 
 $$
 Bin = CLOSE(Bin, kernel\_eliptico\ 5\times5,\ iter=1)
+$$
+
+### 3.1b Pre-processamento robusto (filtros.py: `preprocessar_imagem_robusto`)
+
+Aplicado antes dos metodos de binarizacao quando iluminacao e irregular:
+
+1) CLAHE com grade fixa:
+
+$$
+Gray_{clahe} = CLAHE(Gray,\ clipLimit=2.0,\ tileGridSize=8\times8)
+$$
+
+2) Suavizacao leve:
+
+$$
+saida = GaussianBlur(Gray_{clahe},\ (3,3),\ 0)
+$$
+
+### 3.1c Binarizacao Adaptativa (filtros.py: `aplicar_filtro_binary_adaptive`)
+
+$$
+blockSize = \max\left(31,\ \left\lfloor\frac{\min(h,w)}{30}\right\rfloor\ \texttt{|}\ 1\right)
+$$
+
+$$
+Binary = AdaptiveThresholdGaussian(Blur,\ THRESH\_BINARY\_INV,\ blockSize,\ C=2)
+$$
+
+$$
+Binary = OPEN(Binary,\ kernel\_eliptico\ 3\times3,\ 1) \to CLOSE(Binary,\ 3\times3,\ 1)
+$$
+
+### 3.1d Score de mascara e selecao automatica (filtros.py: `_score_mascara`, `aplicar_multi_threshold`)
+
+Rejeita mascaras com fill fora da faixa util:
+
+$$
+fill = \frac{pixels_{brancos}}{total},\quad \text{rejeita se } fill < 0.03 \text{ ou } fill > 0.92
+$$
+
+Penaliza mascaras muito ruidosas (alta entropia):
+
+$$
+entropy = -\sum_{i} p_i \log_2(p_i)
+$$
+
+$$
+score = 0.7 \cdot fill - 0.3 \cdot \frac{entropy}{8}
+$$
+
+Selecao do melhor metodo entre OTSU, ADAPTIVE e CANNY:
+
+$$
+mascara = \arg\max_{m \in \{OTSU,\ ADAPTIVE,\ CANNY\}} score(m)
 $$
 
 ### 3.2 Caminho robusto (preprocess.py)
@@ -192,17 +246,15 @@ $$
 
 ## 4. Deteccao de Contorno (contorno.py)
 
+### 4.1 Pipeline robusto (`encontrar_contorno_gota_robusto`)
+
 1) Fechamento inicial:
 
 $$
 Processed = CLOSE(img,\ kernel\ 3\times3,\ iter=1)
 $$
 
-2) Mascara de borda preta (espessura 10):
-
-$$
-Processed \leftarrow rectangle\_border\_zero(Processed,\ thickness=10)
-$$
+2) Margens adaptativas zeradas (top, side, bottom proporcional a $\min(h,w)$).
 
 3) Contorno externo:
 
@@ -210,31 +262,51 @@ $$
 contours = findContours(Processed,\ RETR\_EXTERNAL,\ CHAIN\_APPROX\_NONE)
 $$
 
-4) Fallback por Canny:
+4) Fallback por Canny se nenhum contorno encontrado:
 
 $$
 Edges = Canny(img, 30, 100)
 $$
 
-5) Filtro topologico de bordas (margem 5):
+5) Validacao por $\_validar\_contorno$ — criterios aplicados a cada candidato:
 
 $$
-border\_count = I_{left} + I_{right} + I_{top} + I_{bottom}
+Area \ge 100
 $$
 
-Aceita se:
-
 $$
-border\_count < 3
+bw \ge 20\ \land\ bh \ge 20
 $$
 
-6) Filtro de area:
+$$
+\frac{\max(bw, bh)}{\min(bw, bh)} < 8
+$$
+
+$$
+circularidade = \frac{4\pi \cdot Area}{P^2} > 0.5
+$$
+
+$$
+convexidade = \frac{Area}{Area_{hull}} > 0.7
+$$
+
+6) Selecao do maior contorno valido, remocao de pontos nas bordas.
+
+### 4.2 Filtros do pipeline original (`encontrar_contorno_gota`)
+
+Filtro topologico de bordas (margem 5):
+
+$$
+border\_count = I_{left} + I_{right} + I_{top} + I_{bottom},\quad aceita\ se\ border\_count < 3
+$$
+
+Filtro de area:
 
 $$
 Area(contorno) \ge 100
 $$
 
-7) Filtro final de pontos (margem 10):
+Filtro final de pontos (margem 10):
 
 $$
 10 < x < w-10\ \land\ 10 < y < h-10
@@ -257,18 +329,59 @@ $$
 \end{cases}
 $$
 
-### 5.2 Baseline por Floor-Seeker
+### 5.2 Baseline robusta por TLS + filtro MAD
+
+No pipeline atual, a baseline e estimada com ajuste de reta robusto nos pontos inferiores do contorno.
+
+Selecao da faixa inferior por quantil:
+
+$$
+q = clip\left(1 - clip(BASELINE\_BOTTOM\_FRACTION,\ 0.02,\ 0.5),\ 0,\ 1\right)
+$$
+
+$$
+y_{cut} = quantile(Y_{contorno}, q),
+\quad floor\_pts = \{pontos\ :\ Y \ge y_{cut}\}
+$$
+
+Ajuste de reta por TLS (OpenCV fitLine, norma L1):
+
+$$
+(v_x, v_y, x_0, y_0) = fitLine(floor\_pts)
+$$
+
+Distancia perpendicular ponto-reta:
+
+$$
+d_i = \frac{|v_y(x_i-x_0) - v_x(y_i-y_0)|}{\sqrt{v_x^2+v_y^2}}
+$$
+
+Poda robusta por MAD (iterativa):
+
+$$
+med = median(d),
+\quad MAD = median\left(|d - med|\right)
+$$
+
+$$
+\sigma_{rob} = 1.4826\cdot MAD,
+\quad limiar = \max(BASELINE\_INLIER\_MIN\_PIXELS,\ BASELINE\_INLIER\_MAD\_SCALE\cdot\sigma_{rob})
+$$
+
+$$
+inlier_i \iff d_i \le limiar
+$$
+
+Baseline final (piso fisico robusto):
+
+$$
+Y_{base} = quantile(Y_{inliers}, 0.90)
+$$
+
+Fallback conservador (compatibilidade):
 
 $$
 Y_{base} = \max(Y_{contorno})
-$$
-
-$$
-floor\_pts = \{pontos\ :\ |Y - Y_{base}| \le 5\}
-$$
-
-$$
-x_0 = media(X_{floor\_pts}),\quad (v_x,v_y)=(1,0)
 $$
 
 ### 5.3 Extrapolacao polinomial (grau 2)
@@ -277,7 +390,7 @@ Constantes atuais:
 
 $$
 ROI\_TOP\_EXCLUDE = 0.20,
-\quad ROI\_BOTTOM\_EXCLUDE = 0.005,
+\quad ROI\_BOTTOM\_EXCLUDE = 0.02,
 \quad POLYFIT\_DEGREE = 2
 $$
 
@@ -291,7 +404,7 @@ ROI vertical:
 
 $$
 y_{roi\_top} = Y_{min} + 0.20\cdot height,
-\quad y_{roi\_bottom} = Y_{max} - 0.005\cdot height
+\quad y_{roi\_bottom} = Y_{max} - 0.02\cdot height
 $$
 
 Separacao lateral:
@@ -319,14 +432,19 @@ dist = |X_{lado\_valido} - x_{center}|,
 \quad X_{faltante} = x_{center} \pm dist
 $$
 
-Fallback geometrico:
+Fallback geometrico (tolerancia adaptativa):
 
 $$
-near\_baseline = \{pontos\ :\ |Y - Y_{base}| < 5\}
+tolerancia = \max(5.0,\ 0.15 \cdot height)
 $$
 
 $$
-X_{esq} = \min(X_{near}),\quad X_{dir} = \max(X_{near})
+near\_baseline = \{pontos\ :\ Y \ge Y_{max} - tolerancia\}
+$$
+
+$$
+X_{esq} = \min\left(X_{near\ :\ X \le x_{center}}\right),
+\quad X_{dir} = \max\left(X_{near\ :\ X > x_{center}}\right)
 $$
 
 ---
@@ -339,16 +457,42 @@ Estrategia do modulo:
 - O calculo principal tenta ajuste circular.
 - O fallback polinomial e acionado por falha numerica/geometrica.
 
-### 6.1 Calibracao da baseline
+### 6.1 Calibracao adaptativa da baseline
+
+No codigo atual, o deslocamento da baseline e proporcional a altura da gota com limites minimo e maximo:
 
 $$
-Y_{base}^{adj} = Y_{base} + 3.0
+altura = Y_{max} - Y_{min}
 $$
 
-### 6.2 Janela de pontos para ajuste
+$$
+offset = clip\left(
+ANGLE\_BASELINE\_OFFSET\_FACTOR\cdot altura,
+ANGLE\_BASELINE\_OFFSET\_MIN,
+ANGLE\_BASELINE\_OFFSET\_MAX
+\right)
+$$
 
 $$
-mask = (Y < Y_{base}^{adj} - 3)\ \land\ (Y > Y_{base}^{adj} - 150)
+Y_{base}^{adj} = Y_{base} + offset
+$$
+
+### 6.2 Janela de pontos para ajuste (dinamica)
+
+A altura da janela de ajuste e adaptativa:
+
+$$
+window\_height = clip\left(
+ANGLE\_WINDOW\_HEIGHT\_FACTOR\cdot altura,
+ANGLE\_WINDOW\_HEIGHT\_MIN,
+ANGLE\_WINDOW\_HEIGHT\_MAX
+\right)
+$$
+
+Mascara vertical usada no ajuste:
+
+$$
+mask = (Y < Y_{base}^{adj} - 3)\ \land\ (Y > Y_{base}^{adj} - window\_height)
 $$
 
 ### 6.3 Selecao por lado
@@ -425,8 +569,10 @@ $$
 Inlier:
 
 $$
-residuals_i \le 2\cdot sigma
+residuals_i \le ANGLE\_OUTLIER\_SIGMA\_SCALE\cdot sigma
 $$
+
+No estado atual, o valor default de $ANGLE\_OUTLIER\_SIGMA\_SCALE$ e $2.0$.
 
 ### 6.7 Intersecao circulo-reta (sub-pixel)
 
@@ -571,7 +717,7 @@ $$
 9. $Y_{base}=\max(Y_{contorno})$
 10. $floor\_pts: |Y-Y_{base}|\le5$
 11. $y_{roi\_top}=Y_{min}+0.20\cdot height$
-12. $y_{roi\_bottom}=Y_{max}-0.005\cdot height$
+12. $y_{roi\_bottom}=Y_{max}-0.02\cdot height$
 13. $X(Y)=aY^2+bY+c$
 14. $safe\_normalize=(dx,dy)/hypot(dx,dy)$
 15. $Y_{base}^{adj}=Y_{base}+3.0$
@@ -584,6 +730,10 @@ $$
 22. Se $y_c>Y_{base}^{adj}$: $\theta=180-\theta$
 23. Fallback: $dX/dY=2aY_{base}+b,\ \theta=atan(1/(dX/dY))$
 24. Criterio fallback circular: $(R\le0)\lor(|Y_{base}^{adj}-y_c|\ge R)\lor erro\ numerico$
+25. Score de mascara: $score=0.7\cdot fill - 0.3\cdot entropy/8$; rejeita $fill<0.03$ ou $fill>0.92$
+26. Selecao de metodo: $mascara=\arg\max_{m\in\{OTSU,ADAPTIVE,CANNY\}} score(m)$
+27. Validacao de contorno: $Area\ge100,\ bw/bh\ge20,\ circularidade>0.5,\ convexidade>0.7$
+28. Fallback geometrico: $tolerancia=\max(5.0,\ 0.15\cdot height)$
 
 ---
 

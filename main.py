@@ -93,6 +93,12 @@ class SelectionWindow(ctk.CTk):
         self.ratio = 1.0
         self.offset_x = 0
         self.offset_y = 0
+        
+        # ===== Seleção de Filtro =====
+        self.active_filters = set()   # vazio = Automático; pode ter "OTSU", "CANNY", ou ambos
+        self.binary_image = None      # Imagem binarizada com filtro principal
+        self.binary_preview = None    # Preview com contorno(s) desenhado(s)
+        self.analysis_meta = {}
 
         self.setup_ui()
 
@@ -118,6 +124,43 @@ class SelectionWindow(ctk.CTk):
         # Não adiciona ao layout inicialmente (será feito quando câmera ligar)
         self.btn_capture_visible = False
 
+        # ===== BOTÕES DE FILTRO =====
+        sep = ctk.CTkLabel(top, text="|", text_color="#555555", font=("Arial", 18))
+        sep.pack(side="left", padx=8)
+
+        self.btn_filter_otsu = ctk.CTkButton(
+            top, text="⬛ Binary",
+            width=110,
+            fg_color="#2b2b2b",
+            hover_color="#404040",
+            border_width=2,
+            border_color="#555555",
+            command=lambda: self.toggle_filter("OTSU")
+        )
+        self.btn_filter_otsu.pack(side="left", padx=4)
+
+        self.btn_filter_canny = ctk.CTkButton(
+            top, text="🔲 Edges",
+            width=110,
+            fg_color="#2b2b2b",
+            hover_color="#404040",
+            border_width=2,
+            border_color="#555555",
+            command=lambda: self.toggle_filter("CANNY")
+        )
+        self.btn_filter_canny.pack(side="left", padx=4)
+
+        # Label que mostra o modo atual (Auto / Binary / Edges / Ambos)
+        self.lbl_filter_mode = ctk.CTkLabel(
+            top, text=" Auto",
+            text_color="#aaaaaa",
+            font=("Arial", 11)
+        )
+        self.lbl_filter_mode.pack(side="left", padx=6)
+
+        sep2 = ctk.CTkLabel(top, text="|", text_color="#555555", font=("Arial", 18))
+        sep2.pack(side="left", padx=8)
+
         self.btn_next = ctk.CTkButton(
             top, text="Analisar Seleção →",
             fg_color="green",
@@ -141,15 +184,202 @@ class SelectionWindow(ctk.CTk):
         # handler de fechamento
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    # ===== Gerenciamento de Filtro =====
+    def toggle_filter(self, filtro: str):
+        """Ativa/desativa um filtro (toggle). Ambos podem estar ativos ao mesmo tempo.
+        Se clicar em um já ativo → desativa (volta para Auto se ambos desligados)."""
+        if filtro in self.active_filters:
+            self.active_filters.discard(filtro)
+        else:
+            self.active_filters.add(filtro)
+        self._update_filter_buttons()
+        if self.current_roi is not None:
+            self.apply_and_preview_filter()
+
+    def _update_filter_buttons(self):
+        """Atualiza visual dos botões e label de modo conforme active_filters."""
+        active_fg     = "#1e4d8c"
+        active_border = "#4a9eff"
+        inactive_fg     = "#2b2b2b"
+        inactive_border = "#555555"
+
+        if "OTSU" in self.active_filters:
+            self.btn_filter_otsu.configure(fg_color=active_fg, border_color=active_border)
+        else:
+            self.btn_filter_otsu.configure(fg_color=inactive_fg, border_color=inactive_border)
+
+        if "CANNY" in self.active_filters:
+            self.btn_filter_canny.configure(fg_color=active_fg, border_color=active_border)
+        else:
+            self.btn_filter_canny.configure(fg_color=inactive_fg, border_color=inactive_border)
+
+        # Atualiza label do modo
+        if not self.active_filters:
+            self.lbl_filter_mode.configure(text="🤖 Auto",    text_color="#aaaaaa")
+        elif self.active_filters == {"OTSU"}:
+            self.lbl_filter_mode.configure(text="⬛ Binary",  text_color="#4a9eff")
+        elif self.active_filters == {"CANNY"}:
+            self.lbl_filter_mode.configure(text="🔲 Edges",   text_color="#4a9eff")
+        else:
+            self.lbl_filter_mode.configure(text="⬛🔲 Ambos", text_color="#ffcc00")
+
+    def _gerar_binario_analise(self, roi):
+        """Gera máscara de análise robusta e escolhe o melhor contorno disponível."""
+        try:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            bin_mask, metodo = filtros.aplicar_multi_threshold(roi)
+            mask_gota, pts = contorno.extrair_mascara_gota(bin_mask, img_gray=gray)
+            q = contorno.avaliar_qualidade_contorno(pts, bin_mask.shape)
+            return mask_gota, {
+                "mask_source": metodo,
+                "quality_score": float(q.get("score", 0.0)),
+                "risk_flags": q.get("risk_flags", [])
+            }
+        except Exception:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            _, bin_fallback = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            return bin_fallback, {"mask_source": "FALLBACK_OTSU", "quality_score": 0.0, "risk_flags": ["fallback"]}
+
+    def apply_and_preview_filter(self):
+        """Aplica filtro(s) escolhido(s) à ROI e mostra contorno(s) detectado(s).
+        - Nenhum filtro ativo → modo Auto (usa pipeline padrão, mostra apenas contorno)
+        - 1 filtro ativo     → mostra o resultado desse filtro
+        - Ambos ativos       → mostra os 2 contornos sobrepostos (verde=Binary, ciano=Edges)
+        """
+        if self.raw_image is None or self.current_roi is None:
+            return
+
+        x1, y1, x2, y2 = self.current_roi
+        roi = self.raw_image[y1:y2, x1:x2].copy()
+        if roi.size == 0:
+            return
+
+        try:
+            use_otsu  = "OTSU"  in self.active_filters
+            use_canny = "CANNY" in self.active_filters
+            auto_mode = not use_otsu and not use_canny
+
+            # Imagem cinza da ROI para alimentar Sobel Y do pipeline de separação
+            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+            # Máscaras para preview
+            _, bin_otsu = filtros.aplicar_filtro_binary_otsu(roi)
+            bin_otsu, _ = contorno.remover_substrato_abaixo_superficie(bin_otsu, img_gray=roi_gray)
+            bin_canny = None
+            if use_canny:
+                _, bin_canny = filtros.aplicar_filtro_edges_canny(roi)
+                bin_canny, _ = contorno.remover_substrato_abaixo_superficie(bin_canny, img_gray=roi_gray)
+
+            # Binário de análise respeita o filtro escolhido pelo usuário
+            if use_otsu and not use_canny:
+                self.binary_image, pts = contorno.extrair_mascara_gota(bin_otsu, img_gray=roi_gray)
+                q = contorno.avaliar_qualidade_contorno(pts, self.binary_image.shape)
+                self.analysis_meta = {
+                    "mask_source": "OTSU",
+                    "quality_score": float(q.get("score", 0.0)),
+                    "risk_flags": q.get("risk_flags", []),
+                }
+            elif use_canny and not use_otsu:
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                bin_canny_filled = cv2.morphologyEx(bin_canny, cv2.MORPH_CLOSE, kernel, iterations=2)
+                self.binary_image, pts = contorno.extrair_mascara_gota(bin_canny_filled, img_gray=roi_gray)
+                q = contorno.avaliar_qualidade_contorno(pts, self.binary_image.shape)
+                self.analysis_meta = {
+                    "mask_source": "CANNY",
+                    "quality_score": float(q.get("score", 0.0)),
+                    "risk_flags": q.get("risk_flags", []),
+                }
+            else:
+                # Auto (nenhum ativo ou ambos) — pipeline inteligente escolhe o melhor
+                self.binary_image, self.analysis_meta = self._gerar_binario_analise(roi)
+
+            # --- Monta o preview SEM recortar visualmente a imagem inteira ---
+            preview = self.raw_image.copy()
+
+            # Contorno OTSU (verde) — mostra se OTSU ativo ou auto
+            if use_otsu or auto_mode:
+                pts_otsu = contorno.encontrar_contorno_gota_robusto(bin_otsu)
+                if pts_otsu is None:
+                    pts_otsu = contorno.encontrar_contorno_gota(bin_otsu)
+                if pts_otsu is not None and len(pts_otsu) > 0:
+                    pts_int = pts_otsu.astype(np.int32)
+                    pts_int[:, 0] += x1
+                    pts_int[:, 1] += y1
+                    cv2.polylines(preview, [pts_int], True, (0, 220, 80), 2)
+                    for pt in pts_int:
+                        cv2.circle(preview, tuple(pt), 2, (0, 255, 180), -1)
+
+            # Contorno Canny (ciano) — mostra se CANNY ativo
+            if use_canny and bin_canny is not None:
+                pts_canny = contorno.encontrar_contorno_gota_robusto(bin_canny)
+                if pts_canny is None:
+                    pts_canny = contorno.encontrar_contorno_gota(bin_canny)
+                if pts_canny is not None and len(pts_canny) > 0:
+                    pts_int = pts_canny.astype(np.int32)
+                    pts_int[:, 0] += x1
+                    pts_int[:, 1] += y1
+                    cv2.polylines(preview, [pts_int], True, (255, 200, 0), 2)
+                    for pt in pts_int:
+                        cv2.circle(preview, tuple(pt), 2, (255, 220, 80), -1)
+
+            # Destaca a ROI atual sem recortar a tela
+            cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 255, 255), 2)
+
+            # Legenda no canto
+            legends = []
+            if use_otsu or auto_mode:
+                legends.append(("Binary", (0, 220, 80)))
+            if use_canny:
+                legends.append(("Edges",  (255, 200, 0)))
+            for i, (lbl, color) in enumerate(legends):
+                cv2.putText(preview, lbl, (6, 18 + i * 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
+
+            # Sem texto de análise/qualidade — só mostra o que é necessário
+
+          
+
+            self.binary_preview = preview
+            self.render_frame()
+
+        except Exception as e:
+            print(f"Erro ao aplicar filtro(s) {self.active_filters}: {e}")
+            self.binary_image  = None
+            self.binary_preview = None
+
+    # ===== FIM: Gerenciamento de Filtro =====
+
     # ---------------- IMAGEM ----------------
+    def _reset_selection_state(self):
+        """Limpa ROI e previews para permitir nova seleção sem resíduos do estado anterior."""
+        self.current_roi = None
+        self.roi_start = None
+        self.binary_image = None
+        self.binary_preview = None
+        self.analysis_meta = {}
+        if self.roi_rect is not None:
+            try:
+                self.canvas.delete(self.roi_rect)
+            except Exception:
+                pass
+            self.roi_rect = None
+        try:
+            self.btn_next.configure(state="disabled")
+        except Exception:
+            pass
+
     def load_from_file(self):
         path = filedialog.askopenfilename(
             filetypes=[("Imagens", "*.png *.jpg *.jpeg")]
         )
         if path:
             self.stop_camera()
-            self.raw_image = cv2.imread(path)
-            self.current_roi = None
+            img = cv2.imread(path)
+            if img is None:
+                messagebox.showerror("Erro", "Não foi possível abrir a imagem selecionada.")
+                return
+            self.raw_image = img
+            self._reset_selection_state()
             self.render_frame()
 
     def detect_cameras(self):
@@ -307,9 +537,8 @@ class SelectionWindow(ctk.CTk):
             # Parar a câmera para congelar a imagem
             self.stop_camera()
             
-            # Liberar o botão "Analisar Seleção"
-            self.current_roi = None
-            self.btn_next.configure(state="normal")
+            # Limpa seleção antiga para o usuário recortar novamente
+            self._reset_selection_state()
             
             messagebox.showinfo("Sucesso", f"Imagem capturada e salva!\nCaminho: {filepath}\n\nVocê pode fazer a seleção agora.")
         except Exception as e:
@@ -323,12 +552,24 @@ class SelectionWindow(ctk.CTk):
         if cw < 10:
             cw, ch = 800, 600
 
+        # Sempre mantém a escala da imagem completa para permitir reseleção contínua.
+        if self.binary_preview is not None:
+            display_img = self.binary_preview
+        else:
+            display_img = self.raw_image
+
         ih, iw = self.raw_image.shape[:2]
+
         self.ratio = min(cw / iw, ch / ih)
         nw, nh = int(iw * self.ratio), int(ih * self.ratio)
         self.offset_x, self.offset_y = (cw - nw) // 2, (ch - nh) // 2
 
-        img = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2RGB)
+        if display_img is self.raw_image:
+            img = cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB)
+        else:
+            # binary_preview já está em BGR
+            img = cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB)
+        
         img = Image.fromarray(img).resize((nw, nh), Image.LANCZOS)
         self.tk_img = ImageTk.PhotoImage(img)
 
@@ -336,6 +577,17 @@ class SelectionWindow(ctk.CTk):
         self.canvas.create_image(
             cw // 2, ch // 2, image=self.tk_img
         )
+
+        # Redesenha ROI atual para facilitar ajustes sem reabrir imagem
+        if self.current_roi is not None:
+            x1, y1, x2, y2 = self.current_roi
+            sx1 = int(x1 * self.ratio + self.offset_x)
+            sy1 = int(y1 * self.ratio + self.offset_y)
+            sx2 = int(x2 * self.ratio + self.offset_x)
+            sy2 = int(y2 * self.ratio + self.offset_y)
+            self.roi_rect = self.canvas.create_rectangle(
+                sx1, sy1, sx2, sy2, outline="yellow", width=2
+            )
 
     # ---------------- ROI ----------------
     def start_roi(self, e):
@@ -364,6 +616,9 @@ class SelectionWindow(ctk.CTk):
             max(ix1, ix2), max(iy1, iy2)
         ]
         self.btn_next.configure(state="normal")
+        
+        # ===== NOVO: Aplica filtro e mostra pré-visualização =====
+        self.apply_and_preview_filter()
 
     def canvas_to_img(self, x, y):
         ix = (x - self.offset_x) / self.ratio
@@ -379,38 +634,24 @@ class SelectionWindow(ctk.CTk):
         if cropped.size == 0:
             return
 
-        # === PRÉ-PROCESSAMENTO: PRIORIZAR FILTROS.PY (OTSU SIMPLES E RÁPIDO) ===
-        try:
-            # Tenta usar filtros.py primeiro (método simples, robusto e rápido)
-            gray_vis, bin_img = filtros.aplicar_pre_processamento(cropped)
-            bgr_vis = cropped  # Usa imagem original para visualização
+        # === Usar filtro selecionado (já pré-visualizado) ou auto ===
+        modo = "Auto" if not self.active_filters else "/".join(sorted(self.active_filters))
+        print(f"[ANÁLISE] Modo: {modo}")
+        if self.binary_image is not None:
+            # Usa máscara sólida preparada para análise.
+            bin_img = self.binary_image.copy()
+            bgr_vis = cropped
             debug_imgs = None
-        except Exception as e:
-            # Fallback para preprocess.py se disponível
-            if HAVE_PREPROCESS:
-                try:
-                    pre = preprocess_image_for_contact_angle(cropped)
-                    bin_img = pre.get("binary")
-                    bgr_vis = pre.get("corrected_bgr", cropped)
-                    debug_imgs = pre.get("debug_imgs")
-                except Exception:
-                    # Última alternativa: grayscale + Otsu manual
-                    gray_vis = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-                    blur = cv2.GaussianBlur(gray_vis, (5, 5), 0)
-                    _, bin_img = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-                    bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel, iterations=1)
-                    bgr_vis = cropped
-                    debug_imgs = None
-            else:
-                # Última alternativa: grayscale + Otsu manual
-                gray_vis = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-                blur = cv2.GaussianBlur(gray_vis, (5, 5), 0)
-                _, bin_img = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-                bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel, iterations=1)
-                bgr_vis = cropped
-                debug_imgs = None
+        else:
+            # Gera máscara robusta caso não exista preview anterior.
+            bin_img, self.analysis_meta = self._gerar_binario_analise(cropped)
+            bgr_vis = cropped
+            debug_imgs = None
+
+        if self.analysis_meta:
+            src = self.analysis_meta.get("mask_source", "?")
+            q = int(100 * float(self.analysis_meta.get("quality_score", 0.0)))
+            print(f"[ANÁLISE] Mascara: {src} | Qualidade estimada: {q}%")
 
         # sanity checks
         if bin_img is None:
@@ -430,6 +671,28 @@ class SelectionWindow(ctk.CTk):
         # Abrir janela de análise passando imagem BGR (vis) e BIN (processamento)
         new_win = ContactAngleApp(bgr_vis, bin_img, master=self, debug_imgs=debug_imgs)
         new_win.lift()
+
+    def reset_for_new_test(self):
+        """Reseta estado completo para permitir nova medição."""
+        self.raw_image = None
+        self.current_roi = None
+        self.binary_image = None
+        self.binary_preview = None
+        self.roi_start = None
+        self.roi_rect = None
+        self.active_filters = set()
+        try:
+            self.canvas.delete("all")
+        except Exception:
+            pass
+        try:
+            self._update_filter_buttons()
+        except Exception:
+            pass
+        try:
+            self.btn_next.configure(state="disabled")
+        except Exception:
+            pass
 
     def _on_close(self):
         # parar camera e sair
@@ -496,6 +759,7 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.p_esq = None
         self.p_dir = None
         self.contact_method = None
+        self.fit_quality = {"score": 0.0, "rmse_px": 999.0, "n_pts": 0.0}
 
         self.zoom_scale = 1.0
         self.pan_offset_x = 0
@@ -555,10 +819,14 @@ class ContactAngleApp(ctk.CTkToplevel):
         Prioridade 2: Fallback Estatístico (apenas se a física falhar)
         """
         # 1. Obtém o contorno da gota através do módulo especializado
-        self.gota_pts = contorno.encontrar_contorno_gota(self.bin_image)
+        self.gota_pts = contorno.encontrar_contorno_gota_robusto(self.bin_image)
+        if self.gota_pts is None:
+            self.gota_pts = contorno.encontrar_contorno_gota(self.bin_image)
         if self.gota_pts is None:
             messagebox.showerror("Erro", "Não foi possível detectar a silhueta da gota.")
             return
+
+        # Qualidade calculada internamente mas não exibida na UI
 
         # 2. Executa o pipeline híbrido (Apenas UMA vez)
         res = linha_base.detectar_baseline_hibrida(self.gota_pts)
@@ -588,7 +856,20 @@ class ContactAngleApp(ctk.CTkToplevel):
                 self.p_dir = base_p_dir
 
         # DEBUG: ajuda a identificar se os pontos foram detectados corretamente
-        print(f"DEBUG: p_esq={self.p_esq}, p_dir={self.p_dir}, line_params={self.baseline_line_params}, method={self.baseline_method}")
+        print(f"\n{'='*70}")
+        print(f"DEBUG ANÁLISE INICIAL:")
+        print(f"  Contorno: {len(self.gota_pts)} pontos")
+        print(f"  Y_min={np.min(self.gota_pts[:, 1]):.1f}, Y_max={np.max(self.gota_pts[:, 1]):.1f}")
+        print(f"  Baseline Y: {self.baseline_y:.2f}")
+        print(f"  Ponto Esq: {self.p_esq}")
+        print(f"  Ponto Dir: {self.p_dir}")
+        if self.p_esq and self.p_dir:
+            dist = abs(self.p_dir[0] - self.p_esq[0])
+            y_diff = abs(self.p_dir[1] - self.p_esq[1])
+            print(f"  Distância X entre pontos: {dist:.2f} px")
+            print(f"  Diferença Y entre pontos: {y_diff:.2f} px")
+        print(f"  Método contato: {self.contact_method}")
+        print(f"{'='*70}\n")
 
         # 5. Fallback explícito: Segurança científica caso o contorno esteja muito ruidoso
         if self.p_esq is None or self.p_dir is None:
@@ -613,6 +894,15 @@ class ContactAngleApp(ctk.CTkToplevel):
                 self.baseline_method = 'fallback_estatistico'        
         # 6. Registra no console para fins de auditoria científica
         print(f"Análise Concluída via: {self.contact_method}")
+
+        # 6.1 Calcula qualidade dinâmica baseada no resíduo do ajuste geométrico
+        fit_q = angulo_contato.calcular_qualidade_dinamica(
+            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
+        )
+        self.fit_quality = fit_q
+        q_pct = int(100 * float(fit_q.get("score", 0.0)))
+        rmse = float(fit_q.get("rmse_px", 0.0))
+        print(f"[QUALIDADE AJUSTE] Score={q_pct}% | RMSE={rmse:.3f}px")
         
         # 7. Dispara os cálculos matemáticos finais e a renderização
         self.calculate()
@@ -669,8 +959,17 @@ class ContactAngleApp(ctk.CTkToplevel):
         return (cw - nw) // 2 + self.pan_offset_x, (ch - nh) // 2 + self.pan_offset_y
 
     def render(self):
+        # Guarda re-entrância: evita recursão causada por update_idletasks / Configure
+        if getattr(self, '_rendering', False):
+            return
+        self._rendering = True
+        try:
+            self._render_internal()
+        finally:
+            self._rendering = False
+
+    def _render_internal(self):
         self.canvas.delete("all")
-        self.canvas.update_idletasks()
 
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
@@ -723,19 +1022,6 @@ class ContactAngleApp(ctk.CTkToplevel):
             desenho.desenhar_pontos_contato(
                 self.canvas, self.p_esq, self.p_dir, to_scr
             )
-
-            try:
-                ae = float(self.res_e.cget("text")[:-1])
-                ad = float(self.res_d.cget("text")[:-1])
-                desenho.desenhar_tangentes(
-                    self.canvas,
-                    self.p_esq, self.p_dir,
-                    ae, ad,
-                    self.zoom_scale,
-                    to_scr
-                )
-            except:
-                pass
 
     # ============ MÉTODOS PARA ARRASTAR PONTOS MANUALMENTE ============
     
@@ -844,9 +1130,10 @@ class ContactAngleApp(ctk.CTkToplevel):
             pass
 
     def _novo_teste(self):
-        # Volta para a janela de seleção (se existir)
+        # Reseta SelectionWindow e volta a ela
         try:
             if self.master is not None:
+                self.master.reset_for_new_test()
                 self.master.deiconify()
         except Exception:
             pass

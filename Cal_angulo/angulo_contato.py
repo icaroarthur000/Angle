@@ -190,7 +190,7 @@ def calcular_angulo_circular(
     try:
         xc0, yc0, R0 = ajustar_circulo_algebrico(local_pts_centered)
     except (np.linalg.LinAlgError, ValueError):
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
 
     dists = np.hypot(local_pts_centered[:, 0] - xc0, local_pts_centered[:, 1] - yc0)
     residuals = np.abs(dists - R0)
@@ -209,7 +209,7 @@ def calcular_angulo_circular(
     try:
         xc, yc, R = ajustar_circulo_algebrico(local_pts_filtered)
     except (np.linalg.LinAlgError, ValueError):
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
 
     # Reajusta para coordenada global
     yc += mean_xy[1]
@@ -219,22 +219,24 @@ def calcular_angulo_circular(
         # 1. Validação de Raio
         if R is None or R <= 0:
             logger.warning("Ajuste circular falhou: raio inválido.")
-            return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
+            return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
 
         # 2. Ponto de Contato de Sub-pixel (Interseção Círculo-Reta)
-        dy = baseline_ajustada - yc
+        #    Usa baseline_y (superfície real) em vez de baseline_ajustada
+        #    para evitar viés sistemático no ângulo medido.
+        dy = baseline_y - yc
         
         # Verificação se a baseline está fora do círculo
         if abs(dy) >= R:
             logger.warning("Baseline fora do círculo.")
-            return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
+            return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
         
         dx = math.sqrt(max(0.0, R**2 - dy**2))
         x_contato = xc - dx if lado == "esq" else xc + dx
 
         # 3. Derivada Implícita (Inclinação da Tangente)
         numerador = x_contato - xc
-        denominador = baseline_ajustada - yc
+        denominador = baseline_y - yc
         
         if denominador == 0:
             theta_deg = 90.0
@@ -244,20 +246,20 @@ def calcular_angulo_circular(
             theta_deg = math.degrees(theta_rad)
 
         # 4. Ajuste de Quadrante (Hidrofóbico vs Hidrofílico)
-        if yc > baseline_ajustada:
+        if yc > baseline_y:
             theta_deg = 180.0 - theta_deg
             
         # --- DEBUG ---
         logger.debug(
-            "[GONIOMETRIA %s] R=%.2f xc=%.2f yc=%.2f baseline_adj=%.2f angulo=%.2f°",
-            lado, R, xc, yc, baseline_ajustada, theta_deg
+            "[GONIOMETRIA %s] R=%.2f xc=%.2f yc=%.2f baseline=%.2f angulo=%.2f°",
+            lado, R, xc, yc, baseline_y, theta_deg
         )
         
         return float(np.clip(theta_deg, 0.0, 180.0))
 
     except Exception as e:
         logger.error("Erro no cálculo diferencial: %s", e)
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
 
 
 # Manter compatibilidade: alias depreciado

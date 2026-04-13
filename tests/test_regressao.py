@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import cv2
 
@@ -166,3 +168,74 @@ def test_fallback_polinomial_com_pontos_colineares():
     if angulo is not None:
         assert isinstance(angulo, float)
         assert 0.0 <= angulo <= 180.0, f"Fallback retornou ângulo fora do domínio: {angulo}°"
+
+
+# ==========================================================
+# Testes de regressão para gotas com ângulos baixos (30°/50°)
+# Verifica que o cálculo angular não sofre viés sistemático
+# causado pelo offset de calibração na baseline.
+# ==========================================================
+
+def _contorno_calota_esferica(theta_deg, R=60, cx=120, n=300):
+    """Gera contorno de calota esférica perfeita com ângulo de contato dado.
+
+    Retorna (pts, baseline_y, p_esq, p_dir).
+    """
+    theta = math.radians(theta_deg)
+    baseline_y = 200.0
+    yc = baseline_y - R * math.cos(theta)
+    alphas = np.linspace(theta, 2 * np.pi - theta, n)
+    x = cx + R * np.sin(alphas)
+    y = yc + R * np.cos(alphas)
+    pts = np.stack([x, y], axis=1).astype(np.float64)
+    half_w = R * math.sin(theta)
+    p_esq = [cx - half_w, baseline_y]
+    p_dir = [cx + half_w, baseline_y]
+    return pts, baseline_y, p_esq, p_dir
+
+
+def test_angulo_circular_30_graus_sem_vies():
+    """Ângulo de 30° deve ser medido com erro < 2° para gotas de vários tamanhos."""
+    for R in [15, 25, 50]:
+        pts, bl, pe, pd = _contorno_calota_esferica(30, R=R)
+        ae = angulo_contato.calcular_angulo_circular(pts, pe, pd, bl, "esq")
+        ad = angulo_contato.calcular_angulo_circular(pts, pe, pd, bl, "dir")
+        assert ae is not None and ad is not None, f"Cálculo retornou None para R={R}"
+        media = (ae + ad) / 2.0
+        assert abs(media - 30.0) < TOL, (
+            f"Ângulo 30° R={R}: medido {media:.2f}° (erro={abs(media-30):.2f}°, tol={TOL}°)"
+        )
+
+
+def test_angulo_circular_50_graus_sem_vies():
+    """Ângulo de 50° deve ser medido com erro < 2° para gotas de vários tamanhos."""
+    for R in [15, 25, 50]:
+        pts, bl, pe, pd = _contorno_calota_esferica(50, R=R)
+        ae = angulo_contato.calcular_angulo_circular(pts, pe, pd, bl, "esq")
+        ad = angulo_contato.calcular_angulo_circular(pts, pe, pd, bl, "dir")
+        assert ae is not None and ad is not None, f"Cálculo retornou None para R={R}"
+        media = (ae + ad) / 2.0
+        assert abs(media - 50.0) < TOL, (
+            f"Ângulo 50° R={R}: medido {media:.2f}° (erro={abs(media-50):.2f}°, tol={TOL}°)"
+        )
+
+
+def test_angulo_independente_do_raio():
+    """O ângulo medido não deve depender significativamente do tamanho da gota.
+
+    Para o mesmo ângulo de contato, gotas com R=15 e R=80 devem dar resultados
+    semelhantes (variação < 2°).
+    """
+    for target in [30, 50, 90]:
+        medidas = []
+        for R in [15, 25, 50, 80]:
+            pts, bl, pe, pd = _contorno_calota_esferica(target, R=R)
+            ae = angulo_contato.calcular_angulo_circular(pts, pe, pd, bl, "esq")
+            ad = angulo_contato.calcular_angulo_circular(pts, pe, pd, bl, "dir")
+            if ae is not None and ad is not None:
+                medidas.append((ae + ad) / 2.0)
+        assert len(medidas) >= 2, f"θ={target}°: insuficientes medições válidas"
+        variacao = max(medidas) - min(medidas)
+        assert variacao < TOL, (
+            f"θ={target}°: variação entre tamanhos = {variacao:.2f}° (tol={TOL}°)"
+        )

@@ -77,8 +77,11 @@ def _fit_line_robusta(pontos: np.ndarray, debug: bool = False) -> Tuple[float, O
     x0 = float(np.ravel(x0)[0])
     y0 = float(np.ravel(y0)[0])
 
-    # baseline_y robusta: quantil alto dos inliers (mais próximo do piso físico)
-    baseline_y = float(np.quantile(inliers.reshape(-1, 2)[:, 1], 0.90))
+    # baseline_y robusta: quantil 0.98 dos inliers após filtro MAD.
+    # Usar o percentil 98 (em vez do 90 original) aproxima melhor o piso
+    # físico real da gota, reduzindo o viés sistemático na medição angular
+    # enquanto mantém robustez contra outliers residuais.
+    baseline_y = float(np.quantile(inliers.reshape(-1, 2)[:, 1], 0.98))
 
     if debug:
         print(f"[BASELINE ROBUSTA] inliers={len(inliers)} vx={vx:.4f} vy={vy:.4f} y={baseline_y:.2f}")

@@ -1,5 +1,10 @@
 import cv2
 import numpy as np
+from parametros import obter
+
+# Limiar mínimo de circularidade para validar contorno de gota.
+# O valor 0.35 aceita gotas hidrofílicas muito achatadas (Anglo < 30°) sem rejeitar ruído.
+MIN_CIRCULARITY: float = float(obter("min_circularity", 0.35))
 
 
 # =================================================================
@@ -386,7 +391,7 @@ def _validar_contorno(c, h: int, w: int) -> bool:
     if perimetro < 20:
         return False
     circularidade = (4 * np.pi * area) / (perimetro ** 2)
-    if circularidade < 0.5:  # Muito irregular = não é gota
+    if circularidade < MIN_CIRCULARITY:  # Muito irregular = não é gota
         return False
     
     # Critério 5: Convexidade (area real / area hull)
@@ -456,7 +461,9 @@ def avaliar_qualidade_contorno(pts: np.ndarray, img_shape) -> dict:
     bw = max(1.0, x_max - x_min)
     bh = max(1.0, y_max - y_min)
 
-    area_est = float(len(pts))
+    area_est = float(cv2.contourArea(pts.astype(np.float32).reshape(-1, 1, 2)))
+    if area_est == 0.0:
+        area_est = float(len(pts))  # fallback seguro se contorArea retornar 0
     fill_ratio = min(1.0, area_est / float(max(1, bw * bh)))
     altura_rel = min(1.0, bh / float(max(1, h)))
     largura_rel = min(1.0, bw / float(max(1, w)))

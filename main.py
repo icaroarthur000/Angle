@@ -1,61 +1,30 @@
 import cv2
 import numpy as np  
 import math
+import logging
+import threading
 import customtkinter as ctk
 from PIL import Image, ImageTk
 from tkinter import filedialog, messagebox
 import os
 from datetime import datetime
-# tenta importar módulo de pré-processamento robusto; fallback para filtros se faltar
+
+logger = logging.getLogger(__name__)
+
+# tenta importar módulo de pré-processamento robusto; fallback mínimo se faltar
 try:
     from processamento_imagem.preprocess import preprocess_image_for_contact_angle, save_debug_imgs
     HAVE_PREPROCESS = True
-except Exception: 
+except Exception:
     HAVE_PREPROCESS = False
-    def preprocess_image_for_contact_angle(img_bgr):
-        # fallback: usa filtros.aplicar_pre_processamento que retorna (vis, bin)
-        try: 
-            res = filtros.aplicar_pre_processamento(img_bgr)
-            if isinstance(res, dict):
-                # suporta dicionário retornado
-                bin_img = res.get('binary') or res.get('bin')
-                enhanced = res.get('enhanced_gray') or res.get('gray')
-                if enhanced is not None and enhanced.ndim == 2:
-                    vis = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
-                else:
-                    vis = img_bgr
-            else:
-                # espera tuple (gray, bin) ou (vis, bin)
-                first, bin_img = res[0], res[1]
-                if first is None:
-                    vis = img_bgr
-                    enhanced = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-                elif first.ndim == 2:
-                    enhanced = first
-                    vis = cv2.cvtColor(first, cv2.COLOR_GRAY2BGR)
-                else:
-                    vis = first
-                    enhanced = cv2.cvtColor(first, cv2.COLOR_BGR2GRAY)
-        except Exception:
-            # última alternativa: converte para gray e faz threshold simples
-            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-            _, bin_img = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-            vis = img_bgr
-        # garante tipos e formatos
-        if bin_img is None:
-            _, bin_img = cv2.threshold(enhanced, 128, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-        if bin_img.dtype != np.uint8:
-            bin_img = (bin_img.astype(np.uint8))
-        return {"binary": bin_img, "corrected_bgr": vis, "enhanced_gray": enhanced, "debug_imgs": {}}
+    def preprocess_image_for_contact_angle(img_bgr, **_):
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        return {"binary": binary, "corrected_bgr": img_bgr,
+                "enhanced_gray": gray, "debug_imgs": {}}
     def save_debug_imgs(debug_dict, out_dir, prefix="dbg"):
         return None
 
-# Modifique o método toggle_camera para chamar select_camera
-def toggle_camera(self):
-    if not self.camera_running:
-        self.select_camera()  # Chama a nova função para selecionar a câmera
-    else:
-        self.stop_camera()
 # ================= IMPORTS MODULARES =================
 from processamento_imagem import filtros, contorno
 from linha_base import linha_base
@@ -224,16 +193,63 @@ class SelectionWindow(ctk.CTk):
             self.lbl_filter_mode.configure(text="⬛🔲 Ambos", text_color="#ffcc00")
 
     def _gerar_binario_analise(self, roi):
-        """Gera máscara de análise robusta e escolhe o melhor contorno disponível."""
+        """Gera máscara de análise e escolhe a melhor segmentação pelo contorno obtido.
+
+        A priorização é progressiva: se duas máscaras tiverem qualidade parecida,
+        prefere-se a menos agressiva para evitar degradar imagens já boas.
+        """
         try:
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            bin_mask, metodo = filtros.aplicar_multi_threshold(roi)
-            mask_gota, pts = contorno.extrair_mascara_gota(bin_mask, img_gray=gray)
-            q = contorno.avaliar_qualidade_contorno(pts, bin_mask.shape)
-            return mask_gota, {
-                "mask_source": metodo,
-                "quality_score": float(q.get("score", 0.0)),
-                "risk_flags": q.get("risk_flags", [])
+            candidatos = filtros.gerar_candidatos_segmentacao(roi)
+            agressividade = {
+                "OTSU_LIGHT": 0,
+                "ADAPTIVE_LIGHT": 1,
+                "OTSU": 2,
+                "ADAPTIVE": 3,
+                "CANNY": 4,
+            }
+
+            melhor = None
+            margem_empate = 0.03
+            for metodo, bin_mask in candidatos.items():
+                mask_gota, pts = contorno.extrair_mascara_gota(bin_mask, img_gray=gray)
+                q = contorno.avaliar_qualidade_contorno(pts, bin_mask.shape)
+                score = float(q.get("score", 0.0))
+                risk_flags = q.get("risk_flags", [])
+                n_pts = int(len(pts)) if pts is not None else 0
+
+                candidato = {
+                    "mask": mask_gota if mask_gota is not None else bin_mask,
+                    "mask_source": metodo,
+                    "quality_score": score,
+                    "risk_flags": risk_flags,
+                    "n_pts": n_pts,
+                    "agressividade": agressividade.get(metodo, 999),
+                }
+
+                if melhor is None:
+                    melhor = candidato
+                    continue
+
+                score_melhor = float(melhor["quality_score"])
+                if score > score_melhor + 1e-6:
+                    melhor = candidato
+                    continue
+
+                empate_pratico = abs(score - score_melhor) <= margem_empate
+                if empate_pratico:
+                    if candidato["agressividade"] < melhor["agressividade"]:
+                        melhor = candidato
+                    elif candidato["agressividade"] == melhor["agressividade"] and candidato["n_pts"] > melhor["n_pts"]:
+                        melhor = candidato
+
+            if melhor is None:
+                raise ValueError("Nenhum candidato de segmentação disponível")
+
+            return melhor["mask"], {
+                "mask_source": melhor["mask_source"],
+                "quality_score": melhor["quality_score"],
+                "risk_flags": melhor["risk_flags"],
             }
         except Exception:
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -296,8 +312,20 @@ class SelectionWindow(ctk.CTk):
             # --- Monta o preview SEM recortar visualmente a imagem inteira ---
             preview = self.raw_image.copy()
 
-            # Contorno OTSU (verde) — mostra se OTSU ativo ou auto
-            if use_otsu or auto_mode:
+            # Contorno principal — em auto, desenha a máscara realmente escolhida;
+            # em modo manual OTSU, desenha o contorno OTSU clássico.
+            if auto_mode:
+                pts_auto = contorno.encontrar_contorno_gota_robusto(self.binary_image)
+                if pts_auto is None:
+                    pts_auto = contorno.encontrar_contorno_gota(self.binary_image)
+                if pts_auto is not None and len(pts_auto) > 0:
+                    pts_int = pts_auto.astype(np.int32)
+                    pts_int[:, 0] += x1
+                    pts_int[:, 1] += y1
+                    cv2.polylines(preview, [pts_int], True, (0, 220, 80), 2)
+                    for pt in pts_int:
+                        cv2.circle(preview, tuple(pt), 2, (0, 255, 180), -1)
+            elif use_otsu:
                 pts_otsu = contorno.encontrar_contorno_gota_robusto(bin_otsu)
                 if pts_otsu is None:
                     pts_otsu = contorno.encontrar_contorno_gota(bin_otsu)
@@ -327,7 +355,9 @@ class SelectionWindow(ctk.CTk):
 
             # Legenda no canto
             legends = []
-            if use_otsu or auto_mode:
+            if auto_mode:
+                legends.append((self.analysis_meta.get("mask_source", "AUTO"), (0, 220, 80)))
+            elif use_otsu:
                 legends.append(("Binary", (0, 220, 80)))
             if use_canny:
                 legends.append(("Edges",  (255, 200, 0)))
@@ -343,7 +373,7 @@ class SelectionWindow(ctk.CTk):
             self.render_frame()
 
         except Exception as e:
-            print(f"Erro ao aplicar filtro(s) {self.active_filters}: {e}")
+            logger.error("Erro ao aplicar filtro(s) %s: %s", self.active_filters, e)
             self.binary_image  = None
             self.binary_preview = None
 
@@ -383,59 +413,67 @@ class SelectionWindow(ctk.CTk):
             self.render_frame()
 
     def detect_cameras(self):
-        """Detecta todas as câmeras disponíveis no sistema"""
-        cameras = []
-        for i in range(10):  # Testa até 10 câmeras
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
-                cameras.append(i)
-                cap.release()
-        return cameras
+        """Detecta câmeras disponíveis em thread separada para não congelar a UI."""
+        def _scan():
+            cameras = []
+            for i in range(5):  # limita a 5 para reduzir tempo de espera
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    cameras.append(i)
+                    cap.release()
+            self.after(0, lambda: self._on_cameras_detected(cameras))
+        threading.Thread(target=_scan, daemon=True).start()
 
-    def select_camera(self):
-        """Abre diálogo para selecionar qual câmera usar"""
-        cameras = self.detect_cameras()
-        
+    def _on_cameras_detected(self, cameras):
+        """Callback chamado na thread principal após o scan de câmeras."""
         if not cameras:
             messagebox.showerror("Erro", "Nenhuma câmera disponível")
             return
-        
         if len(cameras) == 1:
-            # Se há apenas uma câmera, usa direto
             self.open_camera(cameras[0])
-            return
-        
-        # Se há múltiplas câmeras, abre diálogo de seleção
-        selection_window = ctk.CTkToplevel(self)
-        selection_window.title("Selecionar Câmera")
-        selection_window.geometry("400x300")
-        selection_window.grab_set()
-        
-        ctk.CTkLabel(
-            selection_window,
-            text="Selecione a câmera:",
-            font=("Arial", 14, "bold")
-        ).pack(pady=20)
-        
-        # Criar botões para cada câmera
-        frame = ctk.CTkFrame(selection_window)
+        else:
+            self._mostrar_dialogo_cameras(cameras)
+
+    def _mostrar_dialogo_cameras(self, cameras, substituir=False):
+        """Exibe janela para o usuário escolher a câmera (ou desligar, se substituir=True)."""
+        title = "Trocar Câmera ou Desligar" if substituir else "Selecionar Câmera"
+        sel = ctk.CTkToplevel(self)
+        sel.title(title)
+        sel.geometry("400x300")
+        sel.grab_set()
+        ctk.CTkLabel(sel, text="Selecione a câmera:",
+                     font=("Arial", 14, "bold")).pack(pady=20)
+        frame = ctk.CTkFrame(sel)
         frame.pack(padx=20, pady=10, fill="both", expand=True)
-        
         for cam_id in cameras:
             btn_text = f"Câmera {cam_id}" if cam_id > 0 else "Câmera 0 (Padrão)"
-            ctk.CTkButton(
-                frame,
-                text=btn_text,
-                command=lambda cid=cam_id: [self.open_camera(cid), selection_window.destroy()]
-            ).pack(pady=10, fill="x")
-        
-        # Botão Cancelar
-        ctk.CTkButton(
-            selection_window,
-            text="Cancelar",
-            fg_color="#a52a2a",
-            command=selection_window.destroy
-        ).pack(pady=10, padx=20, fill="x")
+            if substituir:
+                cmd = lambda cid=cam_id: [self.stop_camera(), self.open_camera(cid), sel.destroy()]
+            else:
+                cmd = lambda cid=cam_id: [self.open_camera(cid), sel.destroy()]
+            ctk.CTkButton(frame, text=btn_text, command=cmd).pack(pady=10, fill="x")
+        if substituir:
+            ctk.CTkButton(sel, text="Desligar Câmera", fg_color="#a52a2a",
+                          command=lambda: [self.stop_camera(), sel.destroy()]).pack(pady=10, padx=20, fill="x")
+        else:
+            ctk.CTkButton(sel, text="Cancelar", fg_color="#a52a2a",
+                          command=sel.destroy).pack(pady=10, padx=20, fill="x")
+
+    def select_camera(self):
+        """Inicia scan assíncrono e abre diálogo de seleção de câmera."""
+        self.detect_cameras()
+
+    def select_camera_replace(self):
+        """Inicia scan assíncrono para trocar/desligar câmera."""
+        def _scan_replace():
+            cameras = []
+            for i in range(5):
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    cameras.append(i)
+                    cap.release()
+            self.after(0, lambda: self._mostrar_dialogo_cameras(cameras, substituir=True))
+        threading.Thread(target=_scan_replace, daemon=True).start()
 
     def open_camera(self, camera_id):
         """Abre a câmera com o ID especificado"""
@@ -446,56 +484,15 @@ class SelectionWindow(ctk.CTk):
         self.camera_running = True
         # Mostra o botão de capturar
         if not self.btn_capture_visible:
-            self.btn_capture.pack(side="left", padx=10, after=self.master.winfo_children()[0] if self.master else None)
+            self.btn_capture.pack(side="left", padx=10, before=self.btn_next)
             self.btn_capture_visible = True
         self.update_camera()
 
     def toggle_camera(self):
         if not self.camera_running:
-            self.select_camera()  # Abre diálogo para selecionar câmera
+            self.select_camera()
         else:
-            # Se câmera está ligada, abre diálogo para trocar
             self.select_camera_replace()
-
-    def select_camera_replace(self):
-        """Abre diálogo para trocar câmera ou desligar"""
-        cameras = self.detect_cameras()
-        
-        if not cameras:
-            messagebox.showerror("Erro", "Nenhuma câmera disponível")
-            return
-        
-        # Se há múltiplas câmeras, abre diálogo de seleção
-        selection_window = ctk.CTkToplevel(self)
-        selection_window.title("Trocar Câmera ou Desligar")
-        selection_window.geometry("400x300")
-        selection_window.grab_set()
-        
-        ctk.CTkLabel(
-            selection_window,
-            text="Selecione a câmera ou deslige:",
-            font=("Arial", 14, "bold")
-        ).pack(pady=20)
-        
-        # Criar botões para cada câmera
-        frame = ctk.CTkFrame(selection_window)
-        frame.pack(padx=20, pady=10, fill="both", expand=True)
-        
-        for cam_id in cameras:
-            btn_text = f"Câmera {cam_id}" if cam_id > 0 else "Câmera 0 (Padrão)"
-            ctk.CTkButton(
-                frame,
-                text=btn_text,
-                command=lambda cid=cam_id: [self.stop_camera(), self.open_camera(cid), selection_window.destroy()]
-            ).pack(pady=10, fill="x")
-        
-        # Botão Desligar
-        ctk.CTkButton(
-            selection_window,
-            text="Desligar Câmera",
-            fg_color="#a52a2a",
-            command=lambda: [self.stop_camera(), selection_window.destroy()]
-        ).pack(pady=10, padx=20, fill="x")
 
     def stop_camera(self):
         self.camera_running = False
@@ -636,7 +633,7 @@ class SelectionWindow(ctk.CTk):
 
         # === Usar filtro selecionado (já pré-visualizado) ou auto ===
         modo = "Auto" if not self.active_filters else "/".join(sorted(self.active_filters))
-        print(f"[ANÁLISE] Modo: {modo}")
+        logger.debug("[ANÁLISE] Modo: %s", modo)
         if self.binary_image is not None:
             # Usa máscara sólida preparada para análise.
             bin_img = self.binary_image.copy()
@@ -651,7 +648,7 @@ class SelectionWindow(ctk.CTk):
         if self.analysis_meta:
             src = self.analysis_meta.get("mask_source", "?")
             q = int(100 * float(self.analysis_meta.get("quality_score", 0.0)))
-            print(f"[ANÁLISE] Mascara: {src} | Qualidade estimada: {q}%")
+            logger.debug("[ANÁLISE] Mascara: %s | Qualidade estimada: %d%%", src, q)
 
         # sanity checks
         if bin_img is None:
@@ -730,16 +727,18 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.raw_image = img_bgr
         self.bin_image = img_bin
 
-        # checagens de sanidade
-        try:
-            assert self.raw_image is not None
-            assert self.bin_image is not None
-            assert self.raw_image.ndim == 3 and self.raw_image.shape[2] == 3
-            assert self.bin_image.ndim == 2
-            assert self.raw_image.shape[:2] == self.bin_image.shape[:2]
-            assert self.bin_image.dtype == np.uint8
-        except AssertionError:
-            messagebox.showerror("Erro", "Imagens inválidas passadas para análise (verifique formatos e dimensões).")
+        # checagens de sanidade — AVISO-05: if explícito (assert é desativado com -O)
+        if self.raw_image is None or self.bin_image is None:
+            messagebox.showerror("Erro", "Imagens inválidas passadas para análise.")
+            self.destroy()
+            return
+        if self.raw_image.ndim != 3 or self.raw_image.shape[2] != 3:
+            messagebox.showerror("Erro", "Imagem BGR com formato incorreto.")
+            self.destroy()
+            return
+        if self.bin_image.ndim != 2 or self.raw_image.shape[:2] != self.bin_image.shape[:2] \
+                or self.bin_image.dtype != np.uint8:
+            messagebox.showerror("Erro", "Máscara binária com formato incorreto.")
             self.destroy()
             return
 
@@ -855,25 +854,22 @@ class ContactAngleApp(ctk.CTkToplevel):
             if self.p_dir is None and base_p_dir is not None:
                 self.p_dir = base_p_dir
 
-        # DEBUG: ajuda a identificar se os pontos foram detectados corretamente
-        print(f"\n{'='*70}")
-        print(f"DEBUG ANÁLISE INICIAL:")
-        print(f"  Contorno: {len(self.gota_pts)} pontos")
-        print(f"  Y_min={np.min(self.gota_pts[:, 1]):.1f}, Y_max={np.max(self.gota_pts[:, 1]):.1f}")
-        print(f"  Baseline Y: {self.baseline_y:.2f}")
-        print(f"  Ponto Esq: {self.p_esq}")
-        print(f"  Ponto Dir: {self.p_dir}")
+        logger.debug("DEBUG ANÁLISE INICIAL:")
+        logger.debug("  Contorno: %d pontos", len(self.gota_pts))
+        logger.debug("  Y_min=%.1f, Y_max=%.1f", np.min(self.gota_pts[:, 1]), np.max(self.gota_pts[:, 1]))
+        logger.debug("  Baseline Y: %.2f", self.baseline_y)
+        logger.debug("  Ponto Esq: %s", self.p_esq)
+        logger.debug("  Ponto Dir: %s", self.p_dir)
         if self.p_esq and self.p_dir:
             dist = abs(self.p_dir[0] - self.p_esq[0])
             y_diff = abs(self.p_dir[1] - self.p_esq[1])
-            print(f"  Distância X entre pontos: {dist:.2f} px")
-            print(f"  Diferença Y entre pontos: {y_diff:.2f} px")
-        print(f"  Método contato: {self.contact_method}")
-        print(f"{'='*70}\n")
+            logger.debug("  Distância X entre pontos: %.2f px", dist)
+            logger.debug("  Diferença Y entre pontos: %.2f px", y_diff)
+        logger.debug("  Método contato: %s", self.contact_method)
 
         # 5. Fallback explícito: Segurança científica caso o contorno esteja muito ruidoso
         if self.p_esq is None or self.p_dir is None:
-            print("[AVISO]: Transição física falhou. Aplicando Fallback de Geometria Fixa.")
+            logger.warning("Transição física falhou. Aplicando Fallback de Geometria Fixa.")
             self.p_esq, self.p_dir = linha_base.encontrar_pontos_contato(
                 self.gota_pts, self.baseline_y
             )
@@ -893,7 +889,7 @@ class ContactAngleApp(ctk.CTkToplevel):
                 self.baseline_y = y0
                 self.baseline_method = 'fallback_estatistico'        
         # 6. Registra no console para fins de auditoria científica
-        print(f"Análise Concluída via: {self.contact_method}")
+        logger.debug("Análise Concluída via: %s", self.contact_method)
 
         # 6.1 Calcula qualidade dinâmica baseada no resíduo do ajuste geométrico
         fit_q = angulo_contato.calcular_qualidade_dinamica(
@@ -902,7 +898,7 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.fit_quality = fit_q
         q_pct = int(100 * float(fit_q.get("score", 0.0)))
         rmse = float(fit_q.get("rmse_px", 0.0))
-        print(f"[QUALIDADE AJUSTE] Score={q_pct}% | RMSE={rmse:.3f}px")
+        logger.debug("[QUALIDADE AJUSTE] Score=%d%% | RMSE=%.3fpx", q_pct, rmse)
         
         # 7. Dispara os cálculos matemáticos finais e a renderização
         self.calculate()
@@ -940,9 +936,10 @@ class ContactAngleApp(ctk.CTkToplevel):
             self.gota_pts, self.p_esq, self.p_dir, self.baseline_y, "dir"
         )
 
-        self.res_e.configure(text=f"{ae:.2f}°")
-        self.res_d.configure(text=f"{ad:.2f}°")
-        self.res_m.configure(text=f"{(ae+ad)/2:.2f}°")
+        self.res_e.configure(text=f"{ae:.2f}°" if ae is not None else "Erro")
+        self.res_d.configure(text=f"{ad:.2f}°" if ad is not None else "Erro")
+        valores = [v for v in (ae, ad) if v is not None]
+        self.res_m.configure(text=f"{sum(valores)/len(valores):.2f}°" if valores else "Erro")
 
         self.render()
 

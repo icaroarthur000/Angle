@@ -1,7 +1,10 @@
 import cv2
 import numpy as np
+import logging
 from typing import Tuple, Optional, Dict, List
 from parametros import obter
+
+logger = logging.getLogger(__name__)
 
 # =================================================================
 # CONFIGURAÇÕES CIENTÍFICAS (baseado em ADSA e DropSnake)
@@ -93,7 +96,7 @@ def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30, deb
 
     y_vals = gota_pts[:, 1].astype(np.float64)
     y_max = float(np.max(y_vals))
-    q = float(np.clip(1.0 - max(0.02, min(0.5, BASELINE_BOTTOM_FRACTION)), 0.0, 1.0))
+    q = float(np.clip(1.0 - max(0.02, min(0.5, bottom_fraction)), 0.0, 1.0))
     y_cut = float(np.quantile(y_vals, q))
     floor_pts = gota_pts[y_vals >= y_cut]
 
@@ -150,6 +153,11 @@ def find_contact_points_by_extrapolation(
     # Em imagens fáceis, poucos pixels perto do piso podem deslocar muito o ângulo final.
     margem_base = max(6.0, 0.06 * height)
     y_roi_bottom = min(y_roi_bottom, float(baseline_y) - margem_base)
+
+    # Guarda: evitar ROI vazia (pode ocorrer em gotas muito pequenas)
+    if y_roi_bottom <= y_roi_top:
+        logger.warning("ROI vazia após margem_base=%.1fpx. Usando margem mínima.", margem_base)
+        y_roi_bottom = float(baseline_y) - 2.0
     
     roi_mask = (y_vals >= y_roi_top) & (y_vals <= y_roi_bottom)
     roi_pts = gota_pts[roi_mask]
@@ -160,7 +168,8 @@ def find_contact_points_by_extrapolation(
     x_center = float(np.mean(gota_pts[:, 0]))
     
     if debug:
-        print(f"[EXTRAPOLAÇÃO] ROI: {len(roi_pts)} pontos entre Y={y_roi_top:.1f} e Y={y_roi_bottom:.1f}")
+        logger.debug("[EXTRAPOLAÇÃO] ROI: %d pontos entre Y=%.1f e Y=%.1f",
+                     len(roi_pts), y_roi_top, y_roi_bottom)
     
     # Separa em esquerda e direita
     left_pts = roi_pts[roi_pts[:, 0] < x_center]
@@ -242,8 +251,10 @@ def fallback_geometric(gota_pts: np.ndarray, baseline_y: float, debug: bool = Fa
     terco_inf = gota_pts[gota_pts[:, 1] >= y_terco]
     if len(terco_inf) >= 2:
         x_center = float(np.mean(gota_pts[:, 0]))
-        x_min = float(np.min(terco_inf[terco_inf[:, 0] <= x_center][:, 0])) if np.any(terco_inf[:, 0] <= x_center) else float(np.min(terco_inf[:, 0]))
-        x_max = float(np.max(terco_inf[terco_inf[:, 0] > x_center][:, 0])) if np.any(terco_inf[:, 0] > x_center) else float(np.max(terco_inf[:, 0]))
+        left_terco = terco_inf[terco_inf[:, 0] <= x_center]
+        right_terco = terco_inf[terco_inf[:, 0] > x_center]
+        x_min = float(np.min(left_terco[:, 0])) if len(left_terco) > 0 else float(np.min(terco_inf[:, 0]))
+        x_max = float(np.max(right_terco[:, 0])) if len(right_terco) > 0 else float(np.max(terco_inf[:, 0]))
         return [x_min, baseline_y], [x_max, baseline_y]
 
     x_min = float(np.min(gota_pts[:, 0]))
@@ -321,7 +332,6 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray, debug: bool = False) -> Dict
         'p_dir': _norm_pt(p_dir),
         'method': 'floor_seeker_hybrid',
         'contact_method': 'polynomial_extrapolation',
-        'r_squared': 1.0
     }
 
 

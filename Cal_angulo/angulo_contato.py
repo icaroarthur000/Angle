@@ -1,7 +1,11 @@
-from typing import Union, Tuple, Dict
+from typing import Union, Tuple, Dict, Optional
 import numpy as np
 import math
+import logging
+import warnings
 from parametros import obter
+
+logger = logging.getLogger(__name__)
 
 
 ANGLE_BASELINE_OFFSET_FACTOR = float(obter("angle_baseline_offset_factor", 0.01))
@@ -158,14 +162,14 @@ def calcular_angulo_circular(
     p_dir: Union[list, tuple],
     baseline_y: float,
     lado: str
-) -> float:
+) -> Optional[float]:
     """Calcula o ângulo de contato via Goniometria Diferencial (Ajuste Circular + Derivada)."""
     if gota_pts is None or len(gota_pts) < 5:
-        return 0.0
+        return None
     if p_esq is None or p_dir is None:
-        return 0.0
+        return None
     if lado not in ("esq", "dir"):
-        return 0.0
+        return None
     
     # --- CALIBRAÇÃO ADAPTATIVA DE BASELINE ---
     altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1])) if len(gota_pts) > 0 else 100.0
@@ -176,7 +180,7 @@ def calcular_angulo_circular(
     local_pts = _selecionar_pontos_lado(gota_pts, p_esq, p_dir, baseline_ajustada, lado)
 
     if len(local_pts) < 3:
-        return 0.0
+        return None
 
     # Normalização de coordenadas (centering)
     mean_xy = np.mean(local_pts, axis=0)
@@ -185,8 +189,8 @@ def calcular_angulo_circular(
     # Ajuste inicial do círculo para remoção de outliers (Filtro Sigma)
     try:
         xc0, yc0, R0 = ajustar_circulo_algebrico(local_pts_centered)
-    except Exception:
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+    except (np.linalg.LinAlgError, ValueError):
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
 
     dists = np.hypot(local_pts_centered[:, 0] - xc0, local_pts_centered[:, 1] - yc0)
     residuals = np.abs(dists - R0)
@@ -199,13 +203,13 @@ def calcular_angulo_circular(
         local_pts_filtered = local_pts_centered
 
     if len(local_pts_filtered) < 3:
-        return 0.0
+        return None
 
     # Ajuste Circular final usando pontos limpos
     try:
         xc, yc, R = ajustar_circulo_algebrico(local_pts_filtered)
-    except Exception:
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+    except (np.linalg.LinAlgError, ValueError):
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
 
     # Reajusta para coordenada global
     yc += mean_xy[1]
@@ -214,16 +218,16 @@ def calcular_angulo_circular(
     try:
         # 1. Validação de Raio
         if R is None or R <= 0:
-            print("Ajuste circular falhou: raio inválido.")
-            return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+            logger.warning("Ajuste circular falhou: raio inválido.")
+            return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
 
         # 2. Ponto de Contato de Sub-pixel (Interseção Círculo-Reta)
         dy = baseline_ajustada - yc
         
         # Verificação se a baseline está fora do círculo
         if abs(dy) >= R:
-            print("Baseline fora do círculo.")
-            return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+            logger.warning("Baseline fora do círculo.")
+            return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
         
         dx = math.sqrt(max(0.0, R**2 - dy**2))
         x_contato = xc - dx if lado == "esq" else xc + dx
@@ -243,19 +247,24 @@ def calcular_angulo_circular(
         if yc > baseline_ajustada:
             theta_deg = 180.0 - theta_deg
             
-        # --- DEBUG PROFISSIONAL ---
-        print(f"\n--- GONIOMETRIA DIFERENCIAL ({lado}) ---")
-        print(f"Baseline Original: {baseline_y:.2f} | Baseline Ajustada: {baseline_ajustada:.2f}")
-        print(f"Raio (R): {R:.2f} | Centro: ({xc:.2f}, {yc:.2f})")
-        print(f"Sub-pixel X contato: {x_contato:.2f}")
-        print(f"ÂNGULO FINAL: {theta_deg:.2f}°\n")
+        # --- DEBUG ---
+        logger.debug(
+            "[GONIOMETRIA %s] R=%.2f xc=%.2f yc=%.2f baseline_adj=%.2f angulo=%.2f°",
+            lado, R, xc, yc, baseline_ajustada, theta_deg
+        )
         
         return float(np.clip(theta_deg, 0.0, 180.0))
 
     except Exception as e:
-        print(f"Erro no cálculo diferencial: {e}")
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+        logger.error("Erro no cálculo diferencial: %s", e)
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
 
 
-# Manter compatibilidade: alias para a nova função
-calcular_angulo_polinomial = calcular_angulo_circular
+# Manter compatibilidade: alias depreciado
+def calcular_angulo_polinomial(*args, **kwargs):
+    warnings.warn(
+        "calcular_angulo_polinomial está depreciado. Use calcular_angulo_circular.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return calcular_angulo_circular(*args, **kwargs)

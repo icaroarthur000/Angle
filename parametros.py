@@ -1,6 +1,9 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict
+
+_log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 
@@ -9,7 +12,7 @@ DEFAULTS: Dict[str, Any] = {
     "baseline_inlier_min_pixels": 2.0,
     "baseline_inlier_mad_scale": 2.5,
     "baseline_refine_iterations": 2,
-    "roi_bottom_exclude": 0.02,
+    "roi_bottom_exclude": 0.08,
     "roi_top_exclude": 0.20,
     "polyfit_degree": 2,
     "min_points_for_fit": 8,
@@ -23,6 +26,7 @@ DEFAULTS: Dict[str, Any] = {
     "quality_rmse_ref_px": 3.0,
     "quality_min_score": 0.0,
     "quality_max_score": 1.0,
+    "min_circularity": 0.35,
     "test_angle_tolerance_deg": 1.0
 }
 
@@ -40,8 +44,8 @@ def carregar_parametros(force_reload: bool = False) -> Dict[str, Any]:
             raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
                 data.update(raw)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("Falha ao ler %s: %s. Usando valores padrão.", CONFIG_PATH, e)
 
     _CACHE = data
     return data

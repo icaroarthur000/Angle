@@ -1,21 +1,37 @@
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def desenhar_baseline(canvas, baseline_y, ratio, offset_x, offset_y, 
-                     image_width=None, line_params=None):
+def desenhar_baseline(canvas, baseline_y, ratio, offset_x, offset_y,
+                      image_width=None, line_params=None):
     """
     Desenha a linha base (vermelha).
-    Garante que a linha acompanhe a gota milimetricamente no zoom.
+    Suporta baseline inclinada quando line_params=(vx, vy, x0, y0) é fornecido.
     """
     if baseline_y is None:
         return
 
-    # 1. Definir a extensão da linha (do início ao fim da largura da imagem)
-    # Se image_width não for passado, tentamos pegar do canvas, mas o ideal é vir do main
-    w_img = image_width if image_width else 1000
+    # AVISO-04: usa largura real do canvas como fallback em vez de 1000 px fixo
+    w_img = image_width if image_width else canvas.winfo_width()
 
-    # CORREÇÃO: Ignorar line_params temporariamente
-    # Sempre usar a linha horizontal até corrigir o cálculo de line_params
+    # CROSS-01: renderiza a inclinação real da baseline quando disponível
+    if line_params is not None:
+        vx, vy, x0, y0 = line_params
+        if abs(vx) > 1e-9:
+            t_left  = (0 - x0) / vx
+            t_right = (w_img - x0) / vx
+            y_left  = y0 + t_left  * vy
+            y_right = y0 + t_right * vy
+            x1 = offset_x
+            y1 = y_left  * ratio + offset_y
+            x2 = offset_x + w_img * ratio
+            y2 = y_right * ratio + offset_y
+            canvas.create_line(x1, y1, x2, y2, fill="red", width=2, tags="baseline")
+            return
+
+    # Fallback: baseline horizontal
     y_scr = (baseline_y * ratio) + offset_y
     x_start = offset_x
     x_end = offset_x + (w_img * ratio)
@@ -38,8 +54,8 @@ def desenhar_contorno(canvas, gota_pts, to_scr):
         for pt in gota_pts:
             pts_list.extend(to_scr(pt[0], pt[1]))
         canvas.create_line(*pts_list, fill="cyan", width=1, tags="contour")
-    except Exception:
-        pass
+    except (TypeError, ValueError) as e:
+        logger.debug("desenhar_contorno: %s", e)
 
 
 def desenhar_pontos_contato(canvas, p_esq, p_dir, to_scr):
@@ -58,8 +74,8 @@ def desenhar_pontos_contato(canvas, p_esq, p_dir, to_scr):
             try:
                 x, y = to_scr(p[0], p[1])
                 canvas.create_oval(x-r, y-r, x+r, y+r, fill="yellow", outline="black", tags="contact_point")
-            except Exception:
-                pass
+            except (TypeError, ValueError) as e:
+                logger.debug("desenhar_pontos_contato: %s", e)
 def desenhar_tangentes(canvas, p_esq, p_dir, ae, ad, zoom_scale, to_scr):
     """
     Desenha as linhas de tangente nos pontos de contato com proporção visual constante.
@@ -97,5 +113,5 @@ def desenhar_tangentes(canvas, p_esq, p_dir, ae, ad, zoom_scale, to_scr):
             x2, y2 = to_scr(x + dx, y + dy)
             canvas.create_line(x1, y1, x2, y2, fill="green", width=2, tags="tangent")
             
-    except Exception as e:
-        print(f"Erro na renderização das tangentes: {e}")
+    except (TypeError, ValueError, AttributeError) as e:
+        logger.warning("Erro na renderização das tangentes: %s", e)

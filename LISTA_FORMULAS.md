@@ -32,6 +32,9 @@
 | `processed = MORPH_CLOSE(img, kernel=ones 3x3, iter=1)` | `contorno.py` | Fechamento leve antes de contornos |
 | `processed = rectangle_border_zero(processed, espessura=10)` | `contorno.py` | Mascara de seguranca nas bordas |
 | `edges = Canny(img, threshold1=30, threshold2=100)` | `contorno.py` | Fallback por bordas |
+| `circularidade = (4*pi*Area)/(Perimetro^2)`, valida se `circularidade >= MIN_CIRCULARITY` | `contorno.py` | Rejeita contornos irregulares (MIN_CIRCULARITY default 0.35) |
+| `convexidade = Area/Area_hull`, valida se `convexidade >= 0.7` | `contorno.py` | Rejeita contornos muito concavos |
+| `fill_ratio = Area/(bw*bh)`, valida se `fill_ratio >= 0.5` | `contorno.py` | Rejeita contornos ocos/noisy |
 | `border_count = [touch_left] + [touch_right] + [touch_top] + [touch_bottom]` | `contorno.py` | Contagem de bordas tocadas |
 | `contorno valido se border_count < 3` | `contorno.py` | Remove borda da imagem mascarada como contorno |
 | `valid_mask = (10 < x < w-10) AND (10 < y < h-10)` | `contorno.py` | Filtra pontos proximos das extremidades |
@@ -56,7 +59,7 @@
 | `X_contato = X(Y_baseline)` | `linha_base.py` | Intersecao extrapolada com baseline |
 | `dist = abs(X_lado - x_center)` | `linha_base.py` | Distancia lateral para espelhamento |
 | `P_espelhado = [x_center +/- dist, Y_baseline]` | `linha_base.py` | Fallback quando um lado falha |
-| `near_baseline: abs(Y - baseline_y) < 5` | `linha_base.py` | Fallback geometrico |
+| `adaptive_tol = max(5.0, 0.15*altura)` e `near_baseline: Y >= (Y_max - adaptive_tol)` | `linha_base.py` | Fallback geometrico adaptativo |
 | `band_pts: Y >= (Y_max - band_px)` | `linha_base.py` | Faixa inferior para compatibilidade |
 
 ## 5. AJUSTE CIRCULAR E ANGULO - angulo_contato.py
@@ -95,6 +98,7 @@
 |---|---|---|
 | `y_scr = baseline_y * ratio + offset_y` | `desenho.py` | Projecao vertical da baseline |
 | `x_end = offset_x + image_width * ratio` | `desenho.py` | Extensao horizontal da baseline |
+| `t_left=(0-x0)/vx`, `t_right=(w_img-x0)/vx`, `y_left=y0+t_left*vy`, `y_right=y0+t_right*vy` | `desenho.py` | Projecao da baseline inclinada com `line_params=(vx,vy,x0,y0)` |
 | `length = 50 / zoom_scale` | `desenho.py` | Comprimento visual da tangente |
 | `angle_rad = radians(angulo)` | `desenho.py` | Conversao para trigonometria |
 | Lado esquerdo: `dx = length*cos(angle_rad)`, `dy = -length*sin(angle_rad)` | `desenho.py` | Vetor tangente esquerdo |

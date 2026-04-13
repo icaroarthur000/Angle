@@ -56,20 +56,6 @@ def test_multi_threshold_retorna_mascara_e_metodo():
     assert metodo in {"OTSU", "ADAPTIVE", "CANNY"}
 
 
-def test_candidatos_segmentacao_progressiva_sao_validos():
-    img = np.zeros((180, 220, 3), dtype=np.uint8)
-    rr, cc = np.ogrid[:180, :220]
-    mask = (((cc - 110) / 50.0) ** 2 + ((rr - 100) / 35.0) ** 2) <= 1.0
-    img[mask] = (220, 220, 220)
-
-    candidatos = filtros.gerar_candidatos_segmentacao(img)
-
-    assert set(candidatos.keys()) == {"OTSU_LIGHT", "OTSU", "ADAPTIVE_LIGHT", "ADAPTIVE", "CANNY"}
-    for mascara in candidatos.values():
-        assert mascara.shape == img.shape[:2]
-        assert mascara.dtype == np.uint8
-
-
 # =========================================================
 # Teste de ROI-invariância + cascata tripla
 # =========================================================

@@ -17,5 +17,6 @@
   "quality_rmse_ref_px": 3.0,
   "quality_min_score": 0.0,
   "quality_max_score": 1.0,
+  "min_circularity": 0.35,
   "test_angle_tolerance_deg": 1.0
 }

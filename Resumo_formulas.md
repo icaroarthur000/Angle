@@ -283,7 +283,14 @@ $$
 $$
 
 $$
-circularidade = \frac{4\pi \cdot Area}{P^2} > 0.5
+circularidade = \frac{4\pi \cdot Area}{P^2} > MIN\_CIRCULARITY
+$$
+
+No codigo atual esse limiar e parametrico:
+
+$$
+circularidade > MIN\_CIRCULARITY,
+\quad MIN\_CIRCULARITY = obter("min\_circularity", 0.35)
 $$
 
 $$
@@ -390,7 +397,7 @@ Constantes atuais:
 
 $$
 ROI\_TOP\_EXCLUDE = 0.20,
-\quad ROI\_BOTTOM\_EXCLUDE = 0.02,
+\quad ROI\_BOTTOM\_EXCLUDE = 0.08\ (default),
 \quad POLYFIT\_DEGREE = 2
 $$
 
@@ -404,7 +411,23 @@ ROI vertical:
 
 $$
 y_{roi\_top} = Y_{min} + 0.20\cdot height,
-\quad y_{roi\_bottom} = Y_{max} - 0.02\cdot height
+\quad y_{roi\_bottom} = Y_{max} - ROI\_BOTTOM\_EXCLUDE\cdot height
+$$
+
+Com corte adicional perto da baseline para reduzir contaminacao da saia de contato:
+
+$$
+margem\_base = \max(6.0,\ 0.06\cdot height)
+$$
+
+$$
+y_{roi\_bottom} = \min(y_{roi\_bottom},\ Y_{base} - margem\_base)
+$$
+
+Guarda para evitar ROI vazia:
+
+$$
+	ext{se } y_{roi\_bottom} \le y_{roi\_top},\ \ y_{roi\_bottom} = Y_{base} - 2.0
 $$
 
 Separacao lateral:
@@ -632,7 +655,7 @@ Funcao: `_calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)`
 Observacoes de implementacao:
 
 - `local_pts` no fallback esta em coordenadas originais da imagem (nao centradas).
-- A derivada e avaliada em $Y_{base}$ (baseline bruta), nao em $Y_{base}^{adj}$.
+- A derivada e avaliada em $Y_{base}^{adj}$ (baseline ajustada), pois o fallback recebe `baseline_ajustada`.
 
 Ajuste:
 
@@ -643,7 +666,7 @@ $$
 Derivada:
 
 $$
-\frac{dX}{dY} = 2aY_{base} + b
+\frac{dX}{dY} = 2aY_{base}^{adj} + b
 $$
 
 Angulo:
@@ -664,7 +687,9 @@ $$
 
 ## 7. Visualizacao Matematica (desenho.py)
 
-### 7.1 Baseline na tela
+### 7.1 Baseline na tela (horizontal ou inclinada)
+
+Caso horizontal (fallback):
 
 $$
 y_{scr} = baseline_y\cdot ratio + offset_y
@@ -673,6 +698,26 @@ $$
 $$
 x_{start} = offset_x,
 \quad x_{end} = offset_x + image\_width\cdot ratio
+$$
+
+Caso inclinada com `line_params=(v_x,v_y,x_0,y_0)`:
+
+$$
+t_{left} = \frac{0 - x_0}{v_x},
+\quad t_{right} = \frac{image\_width - x_0}{v_x}
+$$
+
+$$
+y_{left} = y_0 + t_{left}v_y,
+\quad y_{right} = y_0 + t_{right}v_y
+$$
+
+$$
+(x_1,y_1)=(offset_x,\ y_{left}\cdot ratio + offset_y)
+$$
+
+$$
+(x_2,y_2)=(offset_x + image\_width\cdot ratio,\ y_{right}\cdot ratio + offset_y)
 $$
 
 ### 7.2 Tangentes desenhadas
@@ -714,13 +759,13 @@ $$
 6. $k_{bg}=\max(51,(\min(h,w)//6)|1)$
 7. $tile=\max(1,\lfloor\min(h,w)/50\rfloor),\ tileGrid=(\min(8,tile),\min(8,tile))$
 8. $blockSize=\max(31,(\min(h,w)//30)|1)$ com ajuste por $max\_allowed$
-9. $Y_{base}=\max(Y_{contorno})$
-10. $floor\_pts: |Y-Y_{base}|\le5$
+9. $q=clip(1-clip(bottom\_fraction,0.02,0.5),0,1),\ y_{cut}=quantile(Y,q)$
+10. $floor\_pts:\ Y\ge y_{cut}$
 11. $y_{roi\_top}=Y_{min}+0.20\cdot height$
-12. $y_{roi\_bottom}=Y_{max}-0.02\cdot height$
+12. $y_{roi\_bottom}=Y_{max}-ROI\_BOTTOM\_EXCLUDE\cdot height$ com corte por margem de baseline
 13. $X(Y)=aY^2+bY+c$
 14. $safe\_normalize=(dx,dy)/hypot(dx,dy)$
-15. $Y_{base}^{adj}=Y_{base}+3.0$
+15. $Y_{base}^{adj}=Y_{base}+clip(fator\cdot altura,min,max)$
 16. Kasa: $solve(A,B)$ com $A=[[S_{uu},S_{uv}],[S_{uv},S_{vv}]]$
 17. $R=media(\sqrt{(x-x_c)^2+(y-y_c)^2})$
 18. Inlier: $residuals_i\le2\sigma$
@@ -728,11 +773,11 @@ $$
 20. $m_{tangente}=-(x_{contato}-x_c)/(Y_{base}^{adj}-y_c)$
 21. $\theta=degrees(atan(|m_{tangente}|))$
 22. Se $y_c>Y_{base}^{adj}$: $\theta=180-\theta$
-23. Fallback: $dX/dY=2aY_{base}+b,\ \theta=atan(1/(dX/dY))$
+23. Fallback: $dX/dY=2aY_{base}^{adj}+b,\ \theta=atan(1/(dX/dY))$
 24. Criterio fallback circular: $(R\le0)\lor(|Y_{base}^{adj}-y_c|\ge R)\lor erro\ numerico$
 25. Score de mascara: $score=0.7\cdot fill - 0.3\cdot entropy/8$; rejeita $fill<0.03$ ou $fill>0.92$
 26. Selecao de metodo: $mascara=\arg\max_{m\in\{OTSU,ADAPTIVE,CANNY\}} score(m)$
-27. Validacao de contorno: $Area\ge100,\ bw/bh\ge20,\ circularidade>0.5,\ convexidade>0.7$
+27. Validacao de contorno: $Area\ge100,\ bw\ge20,\ bh\ge20,\ circularidade>MIN\_CIRCULARITY\ (default\ 0.35),\ convexidade>0.7$
 28. Fallback geometrico: $tolerancia=\max(5.0,\ 0.15\cdot height)$
 
 ---

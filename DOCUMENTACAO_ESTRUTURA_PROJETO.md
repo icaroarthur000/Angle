@@ -199,29 +199,39 @@ se dist < 1e-8: retorna (1, 0)
 
 senao: (dx/dist, dy/dist)
 
-## 5.2 Baseline por FLOOR-SEEKER (codigo atual)
+## 5.2 Baseline robusta por TLS + filtro MAD (codigo atual)
 
-1. Piso da gota:
+1. Selecao da faixa inferior por quantil:
+
+q = clip(1 - clip(bottom_fraction, 0.02, 0.5), 0, 1)
+
+y_cut = quantile(Y_contorno, q)
+
+floor_pts = {pontos | Y >= y_cut}
+
+2. Ajuste robusto de reta com fitLine + poda iterativa por MAD:
+
+(vx, vy, x0, y0) = fitLine(floor_pts)
+
+d_i = abs(vy*(x_i-x0) - vx*(y_i-y0)) / hypot(vx, vy)
+
+MAD = median(abs(d - median(d)))
+
+limiar = max(BASELINE_INLIER_MIN_PIXELS, BASELINE_INLIER_MAD_SCALE * 1.4826 * MAD)
+
+3. Baseline final robusta:
+
+Y_base = quantile(Y_inliers, 0.90)
+
+4. Fallback conservador:
 
 Y_base = max(Y_contorno)
-
-2. Faixa de contato inferior:
-
-floor_pts = {pontos | |Y - Y_base| <= 5}
-
-3. Centro horizontal:
-
-x0 = media(X_floor_pts)
-
-4. Vetor da baseline:
-
-(vx, vy) = (1, 0)
 
 ## 5.3 Extrapolacao polinomial de contato
 
 Constantes atuais:
 - ROI_TOP_EXCLUDE = 0.20
-- ROI_BOTTOM_EXCLUDE = 0.005
+- ROI_BOTTOM_EXCLUDE = 0.08 (default)
 - POLYFIT_DEGREE = 2
 
 1. Altura da gota:
@@ -232,7 +242,13 @@ height = Y_max - Y_min
 
 y_roi_top = Y_min + 0.20 * height
 
-y_roi_bottom = Y_max - 0.005 * height
+y_roi_bottom = Y_max - ROI_BOTTOM_EXCLUDE * height
+
+margem_base = max(6.0, 0.06 * height)
+
+y_roi_bottom = min(y_roi_bottom, Y_base - margem_base)
+
+se y_roi_bottom <= y_roi_top: y_roi_bottom = Y_base - 2.0
 
 3. Separacao por lados:
 
@@ -258,7 +274,9 @@ X_lado_faltante = x_center +- dist
 
 7. Fallback geometrico final:
 
-near_baseline = {pontos | |Y - Y_base| < 5}
+tolerancia = max(5.0, 0.15 * height)
+
+near_baseline = {pontos | Y >= (Y_max - tolerancia)}
 
 X_esq = min(X_near)
 
@@ -279,13 +297,19 @@ Observacao de estrategia:
 
 ## 6.1 Calibracao de baseline
 
-offset_calibracao = 3.0
+offset_calibracao = clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota,
+						 ANGLE_BASELINE_OFFSET_MIN,
+						 ANGLE_BASELINE_OFFSET_MAX)
 
-Y_base_ajustada = Y_base + 3.0
+Y_base_ajustada = Y_base + offset_calibracao
 
 ## 6.2 Janela de pontos para ajuste
 
-mask = (Y < Y_base_ajustada - 3) AND (Y > Y_base_ajustada - 150)
+window_height = clip(ANGLE_WINDOW_HEIGHT_FACTOR * altura_gota,
+					 ANGLE_WINDOW_HEIGHT_MIN,
+					 ANGLE_WINDOW_HEIGHT_MAX)
+
+mask = (Y < Y_base_ajustada - 3) AND (Y > Y_base_ajustada - window_height)
 
 ## 6.3 Selecao por lado
 
@@ -373,7 +397,7 @@ residuals_i = |d_i - R0|
 
 sigma = std(residuals)
 
-inlier se residuals_i <= 2*sigma
+inlier se residuals_i <= ANGLE_OUTLIER_SIGMA_SCALE * sigma
 
 Resultado:
 - local_pts_filtered = subconjunto de `local_pts_centered` (ainda em espaco centrado).
@@ -431,12 +455,11 @@ X(Y) = aY^2 + bY + c
 
 2. Derivada:
 
-dX/dY = 2a*Y_base + b
+dX/dY = 2a*Y_base_ajustada + b
 
 Observacao de consistencia:
-- A derivada no fallback usa `baseline_y` (Y_base bruto), nao `Y_base_ajustada`.
-- Isso significa que os pontos sao selecionados com janela baseada em `Y_base_ajustada`,
-	mas a derivada e avaliada em `Y_base`.
+- No codigo atual, o fallback recebe baseline ajustada (baseline_ajustada),
+  portanto a derivada e avaliada em Y_base_ajustada.
 
 3. Conversao para angulo:
 
@@ -461,6 +484,16 @@ y_scr = baseline_y * ratio + offset_y
 x_start = offset_x
 
 x_end = offset_x + image_width * ratio
+
+Quando line_params=(vx, vy, x0, y0) estiver disponivel, a baseline inclinada e projetada por:
+
+t_left = (0 - x0) / vx
+
+t_right = (image_width - x0) / vx
+
+y_left = y0 + t_left * vy
+
+y_right = y0 + t_right * vy
 
 ## 7.2 Tangentes desenhadas
 
@@ -499,13 +532,13 @@ P2 = (x + dx, y + dy)
 5. k_bg = max(51, (min(h,w)//6)|1)
 6. tile = max(1, int(min(h,w)/50)); tileGrid = (min(8,tile), min(8,tile))
 7. blockSize = max(31, (min(h,w)//30)|1)
-8. Y_base = max(Y_contorno)
-9. floor_pts: |Y - Y_base| <= 5
+8. q = clip(1 - clip(bottom_fraction, 0.02, 0.5), 0, 1); y_cut = quantile(Y, q)
+9. floor_pts: Y >= y_cut
 10. y_roi_top = Y_min + 0.20*height
-11. y_roi_bottom = Y_max - 0.005*height
+11. y_roi_bottom = Y_max - ROI_BOTTOM_EXCLUDE*height (com corte por margem_base)
 12. X(Y) = aY^2 + bY + c
 13. safe_normalize: (dx,dy)/hypot(dx,dy)
-14. Y_base_ajustada = Y_base + 3.0
+14. Y_base_ajustada = Y_base + clip(fator*altura, min, max)
 15. Kasa: solve(A,B) com A=[[Suu,Suv],[Suv,Svv]]
 16. R = media(sqrt((x-xc)^2+(y-yc)^2))
 17. inlier: residual <= 2*sigma
@@ -513,7 +546,7 @@ P2 = (x + dx, y + dy)
 19. m_tangente = -(x_contato-xc)/(Y_base_ajustada-yc)
 20. theta = degrees(atan(|m_tangente|))
 21. se yc > Y_base_ajustada: theta = 180 - theta
-22. fallback: dX/dY = 2a*Y_base + b; theta = atan(1/(dX/dY))
+22. fallback: dX/dY = 2a*Y_base_ajustada + b; theta = atan(1/(dX/dY))
 23. tangente visual: dx = +/-length*cos(theta), dy = -length*sin(theta)
 24. criterio fallback circular: (R <= 0) ou (|Y_base_ajustada - yc| >= R) ou erro de solve/ajuste
 

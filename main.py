@@ -50,6 +50,15 @@ except Exception:
     def save_debug_imgs(debug_dict, out_dir, prefix="dbg"):
         return None
 
+# tenta importar detector de qualidade adaptativo
+try:
+    from processamento_imagem.quality_analyzer import analyze_image_quality
+    HAVE_QUALITY_ANALYZER = True
+except Exception:
+    HAVE_QUALITY_ANALYZER = False
+    def analyze_image_quality(img_bgr):
+        return {"score": 0.5, "mode": "BALANCED"}
+
 # Modifique o método toggle_camera para chamar select_camera
 def toggle_camera(self):
     if not self.camera_running:
@@ -227,18 +236,22 @@ class SelectionWindow(ctk.CTk):
         """Gera máscara de análise robusta e escolhe o melhor contorno disponível."""
         try:
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            bin_mask, metodo = filtros.aplicar_multi_threshold(roi)
+            quality_info = analyze_image_quality(roi)
+            quality_mode = quality_info.get("mode")
+            bin_mask, metodo = filtros.aplicar_multi_threshold(roi, quality_mode=quality_mode)
             mask_gota, pts = contorno.extrair_mascara_gota(bin_mask, img_gray=gray)
             q = contorno.avaliar_qualidade_contorno(pts, bin_mask.shape)
             return mask_gota, {
                 "mask_source": metodo,
                 "quality_score": float(q.get("score", 0.0)),
-                "risk_flags": q.get("risk_flags", [])
+                "risk_flags": q.get("risk_flags", []),
+                "quality_mode": quality_mode,
+                "image_quality_score": quality_info.get("score", 0.5),
             }
         except Exception:
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             _, bin_fallback = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-            return bin_fallback, {"mask_source": "FALLBACK_OTSU", "quality_score": 0.0, "risk_flags": ["fallback"]}
+            return bin_fallback, {"mask_source": "FALLBACK_OTSU", "quality_score": 0.0, "risk_flags": ["fallback"], "quality_mode": None}
 
     def apply_and_preview_filter(self):
         """Aplica filtro(s) escolhido(s) à ROI e mostra contorno(s) detectado(s).
@@ -651,7 +664,9 @@ class SelectionWindow(ctk.CTk):
         if self.analysis_meta:
             src = self.analysis_meta.get("mask_source", "?")
             q = int(100 * float(self.analysis_meta.get("quality_score", 0.0)))
-            print(f"[ANÁLISE] Mascara: {src} | Qualidade estimada: {q}%")
+            qmode = self.analysis_meta.get("quality_mode", "?")
+            img_q = int(100 * float(self.analysis_meta.get("image_quality_score", 0.5)))
+            print(f"[ANÁLISE] Mascara: {src} | Qualidade estimada: {q}% | Modo: {qmode} | Qualidade da imagem: {img_q}%")
 
         # sanity checks
         if bin_img is None:
@@ -987,7 +1002,7 @@ class ContactAngleApp(ctk.CTkToplevel):
 
         img_pil = Image.fromarray(
             cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2RGB)
-        ).resize((nw, nh), Image.NEAREST)
+        ).resize((nw, nh), Image.LANCZOS)
         self.tk_img = ImageTk.PhotoImage(img_pil)
 
         ox = (cw - nw) // 2 + self.pan_offset_x

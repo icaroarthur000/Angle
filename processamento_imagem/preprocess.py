@@ -5,6 +5,11 @@ from typing import Dict, Any, Optional, Tuple
 import cv2
 import numpy as np
 
+# Modos de qualidade (espelha quality_analyzer para evitar import circular)
+_HIGH_QUALITY = "HIGH_QUALITY"
+_BALANCED     = "BALANCED"
+_ROBUST       = "ROBUST"
+
 
 def estimate_background(img_gray, bg_ksize=None):
     h, w = img_gray.shape[:2]
@@ -25,19 +30,56 @@ def correct_illumination_divide(img_gray, bg):
 
 
 def preprocess_image_for_contact_angle(img_bgr,
-                                       nm_gauss=3,
+                                       nm_gauss=None,
                                        bg_ksize=None,
-                                       clahe_clip=2.0,
+                                       clahe_clip=None,
                                        clahe_grid: Optional[Tuple[int, int]] = None,
                                        adapt_blocksize=None,
                                        adapt_C=2,
-                                       do_morph_cleanup=True):
+                                       do_morph_cleanup=True,
+                                       quality_mode: Optional[str] = None):
+    """Pré-processa imagem para medição de ângulo de contato.
+
+    Parâmetro quality_mode (opcional): HIGH_QUALITY, BALANCED ou ROBUST.
+    Quando informado, ajusta automaticamente nm_gauss, clahe_clip e
+    adapt_blocksize caso esses parâmetros não tenham sido passados
+    explicitamente pelo chamador.
+    """
    
     # --- Validação de entrada ---
     if not isinstance(img_bgr, np.ndarray):
         raise TypeError("img_bgr deve ser um numpy.ndarray")
     if img_bgr.ndim != 3 or img_bgr.shape[2] not in (3, 4):
         raise ValueError("img_bgr deve ser uma imagem BGR com 3 canais")
+
+    h_full, w_full = img_bgr.shape[:2]
+
+    # --- Ajuste de parâmetros baseado no quality_mode ---
+    if quality_mode == _HIGH_QUALITY:
+        if nm_gauss is None:
+            nm_gauss = 3
+        if clahe_clip is None:
+            clahe_clip = 1.0
+        if clahe_grid is None:
+            clahe_grid = (4, 4)
+        if adapt_blocksize is None:
+            adapt_blocksize = max(11, (min(h_full, w_full) // 50)) | 1
+    elif quality_mode == _BALANCED:
+        if nm_gauss is None:
+            nm_gauss = 3
+        if clahe_clip is None:
+            clahe_clip = 1.5
+        if clahe_grid is None:
+            tile = max(1, min(4, int(min(h_full, w_full) / 80)))
+            clahe_grid = (tile, tile)
+        if adapt_blocksize is None:
+            adapt_blocksize = max(21, (min(h_full, w_full) // 40)) | 1
+    else:
+        # ROBUST ou None → comportamento original
+        if nm_gauss is None:
+            nm_gauss = 3
+        if clahe_clip is None:
+            clahe_clip = 2.0
 
     # 1) gray + denoise
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)

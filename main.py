@@ -759,7 +759,7 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.p_esq = None
         self.p_dir = None
         self.contact_method = None
-        self.fit_quality = {"score": 0.0, "rmse_px": 999.0, "n_pts": 0.0}
+        self.fit_quality = {"score": 0.0, "rmse_px": 999.0, "n_pts": 2.0}
 
         self.zoom_scale = 1.0
         self.pan_offset_x = 0
@@ -880,34 +880,83 @@ class ContactAngleApp(ctk.CTkToplevel):
         print(f"  Método contato: {self.contact_method}")
         print(f"{'='*70}\n")
 
-        # 5. Fallback explícito: Segurança científica caso o contorno esteja muito ruidoso
-        if self.p_esq is None or self.p_dir is None:
-            print("[AVISO]: Transição física falhou. Aplicando Fallback de Geometria Fixa.")
-            self.p_esq, self.p_dir = linha_base.encontrar_pontos_contato(
-                self.gota_pts, self.baseline_y
-            )
-            self.contact_method = "fallback_estatistico"
-            # Recompute line parameters from fallback contacts so drawing matches points
-            if self.p_esq is not None and self.p_dir is not None:
-                dx = self.p_dir[0] - self.p_esq[0]
-                dy = self.p_dir[1] - self.p_esq[1]
-                vx, vy = linha_base.safe_normalize(dx, dy)
-                # Use center horizontal of the droplet for x0 to avoid lateral offset
-                try:
-                    x0 = float(np.mean(self.gota_pts[:, 0]))
-                except Exception:
-                    x0 = (self.p_esq[0] + self.p_dir[0]) / 2.0
-                y0 = (self.p_esq[1] + self.p_dir[1]) / 2.0
-                self.baseline_line_params = (float(vx), float(vy), float(x0), float(y0))
-                self.baseline_y = y0
-                self.baseline_method = 'fallback_estatistico'        
+        # --- TRAVA ABSOLUTA NO CHÃO (CORRIGIDA) ---
+        # Acha o verdadeiro chão escaneando o fundo claro ao lado da gota na imagem bruta
+        if self.gota_pts is not None:
+            gray_raw = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2GRAY)
+            _, thresh_bg = cv2.threshold(gray_raw, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # Garantia física: pontos de contato devem permanecer na borda da gota.
-        self._validar_corrigir_pontos_contato(origem="auto")
+            # Olha 5 pixels à esquerda e 5 à direita da gota
+            x_esq = max(0, int(np.min(self.gota_pts[:, 0])) - 5)
+            x_dir = min(gray_raw.shape[1] - 1, int(np.max(self.gota_pts[:, 0])) + 5)
 
-        # 6. Registra no console para fins de auditoria científica
+            meio_y = gray_raw.shape[0] // 2
+
+            # Desce pelas laterais até encontrar o primeiro pixel preto (o substrato)
+            transicoes_esq = np.where(thresh_bg[meio_y:, x_esq] == 0)[0]
+            transicoes_dir = np.where(thresh_bg[meio_y:, x_dir] == 0)[0]
+
+            y_esq = (transicoes_esq[0] + meio_y) if len(transicoes_esq) > 0 else self.baseline_y
+            y_dir = (transicoes_dir[0] + meio_y) if len(transicoes_dir) > 0 else self.baseline_y
+
+            # Pega a linha mais baixa encontrada e trava a linha vermelha nela
+            chao_real = float(max(y_esq, y_dir))
+
+            if chao_real > self.baseline_y:
+                self.baseline_y = chao_real
+        # ------------------------------------------
+
+        # --- IDEIA 3: INTERSEÇÃO TEÓRICA VS PIXEL REAL (PADRÃO INDÚSTRIA) ---
+        if self.gota_pts is not None and self.baseline_y is not None:
+            meio_x = np.mean(self.gota_pts[:, 0])
+            h_gota = np.max(self.gota_pts[:, 1]) - np.min(self.gota_pts[:, 1])
+            y_max_contorno = np.max(self.gota_pts[:, 1])
+            
+            # 1. Define a "Zona Saudável" (ignora os 3% inferiores da gota com ruido; usa até 30% da altura)
+            y_limite_inf = y_max_contorno - (0.03 * h_gota)
+            y_limite_sup = y_max_contorno - (0.30 * h_gota)
+            
+            lado_esq_completo = self.gota_pts[self.gota_pts[:, 0] < meio_x]
+            lado_dir_completo = self.gota_pts[self.gota_pts[:, 0] >= meio_x]
+            
+            pts_esq_saudavel = self.gota_pts[(self.gota_pts[:, 0] < meio_x) & (self.gota_pts[:, 1] >= y_limite_sup) & (self.gota_pts[:, 1] <= y_limite_inf)]
+            pts_dir_saudavel = self.gota_pts[(self.gota_pts[:, 0] >= meio_x) & (self.gota_pts[:, 1] >= y_limite_sup) & (self.gota_pts[:, 1] <= y_limite_inf)]
+            
+            # Função matemática para ajuste global
+            def ancorar_pela_matematica(pts_parede, pts_completo, y_chao):
+                if len(pts_parede) < 5:
+                    # Fallback de segurança em caso de contorno danificado
+                    return pts_completo[np.argmax(pts_completo[:, 1])]
+                
+                # 2. Modela a curva da parede (X em função de Y)
+                poly = np.polyfit(pts_parede[:, 1], pts_parede[:, 0], 2)
+                
+                # 3. Calcula o cruzamento teórico perfeito da curva com o chão
+                x_teorico = np.polyval(poly, y_chao)
+                
+                # 4. Ancora no pixel real do contorno ciano mais próximo desse cruzamento teórico
+                distancias = np.hypot(pts_completo[:, 0] - x_teorico, pts_completo[:, 1] - y_chao)
+                idx_min = np.argmin(distancias)
+                return pts_completo[idx_min]
+
+            # Executa a ancoragem matemática
+            if len(lado_esq_completo) > 0:
+                p_ideal_esq = ancorar_pela_matematica(pts_esq_saudavel, lado_esq_completo, self.baseline_y)
+                self.p_esq = [float(p_ideal_esq[0]), float(p_ideal_esq[1])]
+                
+            if len(lado_dir_completo) > 0:
+                p_ideal_dir = ancorar_pela_matematica(pts_dir_saudavel, lado_dir_completo, self.baseline_y)
+                self.p_dir = [float(p_ideal_dir[0]), float(p_ideal_dir[1])]
+
+        # Alinha a renderização gráfica da linha vermelha com o chão absoluto
+        if self.baseline_line_params is not None:
+            vx, vy, x0, _ = self.baseline_line_params
+            self.baseline_line_params = (vx, vy, x0, self.baseline_y)
+
+        # 6. Registra no console para fins de auditoria cientifica
         print(f"Análise Concluída via: {self.contact_method}")
-
+        
+    
         # 6.1 Calcula qualidade dinâmica baseada no resíduo do ajuste geométrico
         fit_q = angulo_contato.calcular_qualidade_dinamica(
             self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
@@ -936,14 +985,13 @@ class ContactAngleApp(ctk.CTkToplevel):
                     x0 = float(np.mean(self.gota_pts[:, 0]))
                 except Exception:
                     x0 = (self.p_esq[0] + self.p_dir[0]) / 2.0
-                y0 = (self.p_esq[1] + self.p_dir[1]) / 2.0
+                
+                y0 = self.baseline_y  # Usa o Y original
                 self.baseline_line_params = (float(vx), float(vy), float(x0), float(y0))
-                self.baseline_y = y0
                 self.baseline_method = 'fallback_estatistico'
-
-        self._validar_corrigir_pontos_contato(origem="update")
+    
+        
         self.calculate()
-
     def _validar_corrigir_pontos_contato(self, origem: str = "manual"):
         """Corrige contatos fora do contorno, restringindo à faixa inferior."""
         if self.gota_pts is None:
@@ -1121,11 +1169,10 @@ class ContactAngleApp(ctk.CTkToplevel):
             self.dragging_point = 'dir'
 
     def on_canvas_drag(self, e):
-        """Arrasta o ponto enquanto o mouse se move."""
+        """Arrasta o ponto com interação de Snap Magnético."""
         if self.dragging_point is None:
             return
-        
-        # Calcular offsets da tela para imagem
+
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
         ih, iw = self.raw_image.shape[:2]
@@ -1134,38 +1181,43 @@ class ContactAngleApp(ctk.CTkToplevel):
         nh = int(ih * ratio_local)
         ox = (cw - nw) // 2 + self.pan_offset_x
         oy = (ch - nh) // 2 + self.pan_offset_y
-        
-        # Converter coordenadas da tela para imagem
+
         img_x = (e.x - ox) / ratio_local
         img_y = (e.y - oy) / ratio_local
-        
-        # Limitar ao contorno da imagem
         img_x = np.clip(img_x, 0, iw - 1)
-        img_y = np.clip(img_y, 0, ih - 1)
 
-        novo_ponto = [float(img_x), float(img_y)]
-
-        # Restrição física: manter o contato na borda da gota, próximo à baseline.
+        # --- ÍMAN DE CONTORNO ---
         if self.gota_pts is not None:
-            novo_ponto, foi_corrigido = contorno.projetar_ponto_no_contorno(
-                novo_ponto,
-                self.gota_pts,
-                self.baseline_y,
-                tolerancia_px=2.0,
-            )
-            if foi_corrigido:
-                self._ativar_destaque_contorno(400)
-        
-        # Atualizar o ponto sendo arrastado
+            meio_x = np.mean(self.gota_pts[:, 0])
+            
+            if self.dragging_point == 'esq':
+                pts_lado = self.gota_pts[self.gota_pts[:, 0] < meio_x]
+            else:
+                pts_lado = self.gota_pts[self.gota_pts[:, 0] >= meio_x]
+                
+            if len(pts_lado) > 0:
+                distancias = np.hypot(pts_lado[:, 0] - img_x, pts_lado[:, 1] - img_y)
+                idx_min = np.argmin(distancias)
+                menor_distancia = distancias[idx_min]
+                
+                # O ponto gruda automaticamente no contorno ciano se o rato estiver perto (raio de 10px)
+                if menor_distancia < 10.0:
+                    novo_ponto = [float(pts_lado[idx_min, 0]), float(pts_lado[idx_min, 1])]
+                    self._ativar_destaque_contorno(300)
+                else:
+                    # Se o utilizador puxar o rato para longe, o ponto solta do trilho e fica livre
+                    novo_ponto = [float(img_x), float(img_y)]
+            else:
+                novo_ponto = [float(img_x), float(img_y)]
+        else:
+            novo_ponto = [float(img_x), float(img_y)]
+
+        # Atualiza a posição em tempo real
         if self.dragging_point == 'esq':
             self.p_esq = novo_ponto
         elif self.dragging_point == 'dir':
             self.p_dir = novo_ponto
-        
-        # Atualizar baseline_y como a média entre os dois pontos
-        self.baseline_y = (self.p_esq[1] + self.p_dir[1]) / 2.0
-        
-        # Recalcular ângulos e renderizar em tempo real
+
         self.calculate()
 
     def on_canvas_release(self, e):

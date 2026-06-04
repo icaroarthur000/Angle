@@ -800,6 +800,9 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.dragging_point = None  # 'esq', 'dir', ou None
         # Estado para pan (arrastar imagem)
         self.pan_start_pos = None
+        # Estado de feedback visual quando um ponto é corrigido para o contorno
+        self._contorno_destacado = False
+        self._contorno_highlight_after_id = None
 
     def res_box(self, label, highlight=False):
         f = ctk.CTkFrame(
@@ -828,8 +831,14 @@ class ContactAngleApp(ctk.CTkToplevel):
 
         # Qualidade calculada internamente mas não exibida na UI
 
-        # 2. Executa o pipeline híbrido (Apenas UMA vez)
-        res = linha_base.detectar_baseline_hibrida(self.gota_pts)
+        # 2. Cria máscara limpa (somente gota, sem substrato) a partir do contorno
+        # para que detect_baseline_tls use análise por coluna em vez de percentil.
+        _h, _w = self.bin_image.shape[:2]
+        _mask_clean = np.zeros((_h, _w), dtype=np.uint8)
+        cv2.fillPoly(_mask_clean, [self.gota_pts.astype(np.int32)], 255)
+
+        # 3. Executa o pipeline híbrido passando a máscara limpa
+        res = linha_base.detectar_baseline_hibrida(self.gota_pts, mascara=_mask_clean)
         
         # 3. Extrai os parâmetros fundamentais da baseline
         self.baseline_y = res['baseline_y']
@@ -892,6 +901,10 @@ class ContactAngleApp(ctk.CTkToplevel):
                 self.baseline_line_params = (float(vx), float(vy), float(x0), float(y0))
                 self.baseline_y = y0
                 self.baseline_method = 'fallback_estatistico'        
+
+        # Garantia física: pontos de contato devem permanecer na borda da gota.
+        self._validar_corrigir_pontos_contato(origem="auto")
+
         # 6. Registra no console para fins de auditoria científica
         print(f"Análise Concluída via: {self.contact_method}")
 
@@ -927,7 +940,55 @@ class ContactAngleApp(ctk.CTkToplevel):
                 self.baseline_line_params = (float(vx), float(vy), float(x0), float(y0))
                 self.baseline_y = y0
                 self.baseline_method = 'fallback_estatistico'
+
+        self._validar_corrigir_pontos_contato(origem="update")
         self.calculate()
+
+    def _validar_corrigir_pontos_contato(self, origem: str = "manual"):
+        """Corrige contatos fora do contorno, restringindo à faixa inferior."""
+        if self.gota_pts is None:
+            return
+
+        houve_correcao = False
+
+        if self.p_esq is not None:
+            p_esq_final, corrigido_esq = contorno.projetar_ponto_no_contorno(
+                self.p_esq, self.gota_pts, self.baseline_y, tolerancia_px=2.0
+            )
+            self.p_esq = p_esq_final
+            houve_correcao = houve_correcao or corrigido_esq
+            if corrigido_esq:
+                print(f"[CONTORNO] p_esq corrigido ({origem})")
+
+        if self.p_dir is not None:
+            p_dir_final, corrigido_dir = contorno.projetar_ponto_no_contorno(
+                self.p_dir, self.gota_pts, self.baseline_y, tolerancia_px=2.0
+            )
+            self.p_dir = p_dir_final
+            houve_correcao = houve_correcao or corrigido_dir
+            if corrigido_dir:
+                print(f"[CONTORNO] p_dir corrigido ({origem})")
+
+        if houve_correcao:
+            self._ativar_destaque_contorno(400)
+
+    def _ativar_destaque_contorno(self, duracao_ms: int = 400):
+        """Destaca o contorno temporariamente quando houver correção."""
+        self._contorno_destacado = True
+        if self._contorno_highlight_after_id is not None:
+            try:
+                self.after_cancel(self._contorno_highlight_after_id)
+            except Exception:
+                pass
+            self._contorno_highlight_after_id = None
+
+        self.render()
+        self._contorno_highlight_after_id = self.after(duracao_ms, self._desativar_destaque_contorno)
+
+    def _desativar_destaque_contorno(self):
+        self._contorno_destacado = False
+        self._contorno_highlight_after_id = None
+        self.render()
 
     def calculate(self):
         if self.p_esq is None:
@@ -1003,7 +1064,10 @@ class ContactAngleApp(ctk.CTkToplevel):
             return x * self.ratio + ox, y * self.ratio + oy
 
         if self.gota_pts is not None:
-            desenho.desenhar_contorno(self.canvas, self.gota_pts, to_scr)
+            if self._contorno_destacado:
+                desenho.desenhar_contorno_destaque(self.canvas, self.gota_pts, to_scr)
+            else:
+                desenho.desenhar_contorno(self.canvas, self.gota_pts, to_scr)
 
         if self.baseline_y is not None:
             # passar parâmetros de linha base inclinada se disponíveis
@@ -1078,12 +1142,25 @@ class ContactAngleApp(ctk.CTkToplevel):
         # Limitar ao contorno da imagem
         img_x = np.clip(img_x, 0, iw - 1)
         img_y = np.clip(img_y, 0, ih - 1)
+
+        novo_ponto = [float(img_x), float(img_y)]
+
+        # Restrição física: manter o contato na borda da gota, próximo à baseline.
+        if self.gota_pts is not None:
+            novo_ponto, foi_corrigido = contorno.projetar_ponto_no_contorno(
+                novo_ponto,
+                self.gota_pts,
+                self.baseline_y,
+                tolerancia_px=2.0,
+            )
+            if foi_corrigido:
+                self._ativar_destaque_contorno(400)
         
         # Atualizar o ponto sendo arrastado
         if self.dragging_point == 'esq':
-            self.p_esq = [float(img_x), float(img_y)]
+            self.p_esq = novo_ponto
         elif self.dragging_point == 'dir':
-            self.p_dir = [float(img_x), float(img_y)]
+            self.p_dir = novo_ponto
         
         # Atualizar baseline_y como a média entre os dois pontos
         self.baseline_y = (self.p_esq[1] + self.p_dir[1]) / 2.0
@@ -1119,6 +1196,12 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.pan_start_pos = None
 
     def _on_close(self):
+        if self._contorno_highlight_after_id is not None:
+            try:
+                self.after_cancel(self._contorno_highlight_after_id)
+            except Exception:
+                pass
+            self._contorno_highlight_after_id = None
         try:
             if self.master is not None:
                 self.master.destroy()

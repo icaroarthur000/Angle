@@ -1,8 +1,5 @@
-# Documentacao Matematica do Sistema Angle (Versao Final para Professor)
+# Documentacao Matematica do Sistema Angle 
 
-Data: 31 de marco de 2026  
-Projeto: Angle - Contact Angle Measurement System  
-Objetivo: apresentar, em formato unico e academico, todas as formulas matematicas efetivamente usadas no software atual.
 
 ---
 
@@ -89,7 +86,7 @@ $$
 Bin = CLOSE(Bin, kernel\_eliptico\ 5\times5,\ iter=1)
 $$
 
-### 3.1b Pre-processamento robusto (filtros.py: `preprocessar_imagem_robusto`)
+### 3.1b Pre-processamento  (filtros.py: `preprocessar_imagem`)
 
 Aplicado antes dos metodos de binarizacao quando iluminacao e irregular:
 
@@ -143,7 +140,7 @@ $$
 mascara = \arg\max_{m \in \{OTSU,\ ADAPTIVE,\ CANNY\}} score(m)
 $$
 
-### 3.2 Caminho robusto (preprocess.py)
+### 3.2 Caminho (preprocess.py)
 
 #### 3.2.1 Denoise inicial (condicional)
 
@@ -246,7 +243,7 @@ $$
 
 ## 4. Deteccao de Contorno (contorno.py)
 
-### 4.1 Pipeline robusto (`encontrar_contorno_gota_robusto`)
+### 4.1 Pipeline  (`encontrar_contorno_gota`)
 
 1) Fechamento inicial:
 
@@ -292,7 +289,10 @@ $$
 
 6) Selecao do maior contorno valido, remocao de pontos nas bordas.
 
-### 4.2 Filtros do pipeline original (`encontrar_contorno_gota`)
+### 4.2 Filtros do pipeline original (`encontrar_contorno_gota`) - compatibilidade legada
+
+Observacao: estes filtros pertencem ao caminho legado e nao ao fluxo principal atual,
+que prioriza `encontrar_contorno_gota`.
 
 Filtro topologico de bordas (margem 5):
 
@@ -331,7 +331,7 @@ $$
 
 ### 5.2 Baseline robusta por TLS + filtro MAD
 
-No pipeline atual, a baseline e estimada com ajuste de reta robusto nos pontos inferiores do contorno.
+No pipeline atual, a baseline e estimada com ajuste de reta  nos pontos inferiores do contorno.
 
 Selecao da faixa inferior por quantil:
 
@@ -372,7 +372,7 @@ $$
 inlier_i \iff d_i \le limiar
 $$
 
-Baseline final (piso fisico robusto):
+Baseline final (piso fisico ):
 
 $$
 Y_{base} = quantile(Y_{inliers}, 0.90)
@@ -390,7 +390,7 @@ Constantes atuais:
 
 $$
 ROI\_TOP\_EXCLUDE = 0.20,
-\quad ROI\_BOTTOM\_EXCLUDE = 0.02,
+\quad ROI\_BOTTOM\_EXCLUDE = 0.08,
 \quad POLYFIT\_DEGREE = 2
 $$
 
@@ -404,7 +404,7 @@ ROI vertical:
 
 $$
 y_{roi\_top} = Y_{min} + 0.20\cdot height,
-\quad y_{roi\_bottom} = Y_{max} - 0.02\cdot height
+\quad y_{roi\_bottom} = Y_{max} - 0.08\cdot height
 $$
 
 Separacao lateral:
@@ -714,16 +714,16 @@ $$
 6. $k_{bg}=\max(51,(\min(h,w)//6)|1)$
 7. $tile=\max(1,\lfloor\min(h,w)/50\rfloor),\ tileGrid=(\min(8,tile),\min(8,tile))$
 8. $blockSize=\max(31,(\min(h,w)//30)|1)$ com ajuste por $max\_allowed$
-9. $Y_{base}=\max(Y_{contorno})$
-10. $floor\_pts: |Y-Y_{base}|\le5$
+9. $q=clip(1-clip(BASELINE\_BOTTOM\_FRACTION,0.02,0.5),0,1)$
+10. $floor\_pts: Y\ge quantile(Y,q)$
 11. $y_{roi\_top}=Y_{min}+0.20\cdot height$
-12. $y_{roi\_bottom}=Y_{max}-0.02\cdot height$
+12. $y_{roi\_bottom}=Y_{max}-0.08\cdot height$
 13. $X(Y)=aY^2+bY+c$
 14. $safe\_normalize=(dx,dy)/hypot(dx,dy)$
-15. $Y_{base}^{adj}=Y_{base}+3.0$
+15. $Y_{base}^{adj}=Y_{base}+clip(ANGLE\_BASELINE\_OFFSET\_FACTOR\cdot altura,ANGLE\_BASELINE\_OFFSET\_MIN,ANGLE\_BASELINE\_OFFSET\_MAX)$
 16. Kasa: $solve(A,B)$ com $A=[[S_{uu},S_{uv}],[S_{uv},S_{vv}]]$
 17. $R=media(\sqrt{(x-x_c)^2+(y-y_c)^2})$
-18. Inlier: $residuals_i\le2\sigma$
+18. Inlier: $residuals_i\le ANGLE\_OUTLIER\_SIGMA\_SCALE\cdot\sigma$ (default atual: $2.0$)
 19. $dx=\sqrt{\max(0,R^2-dy^2)},\ dy=Y_{base}^{adj}-y_c$
 20. $m_{tangente}=-(x_{contato}-x_c)/(Y_{base}^{adj}-y_c)$
 21. $\theta=degrees(atan(|m_{tangente}|))$
@@ -732,7 +732,7 @@ $$
 24. Criterio fallback circular: $(R\le0)\lor(|Y_{base}^{adj}-y_c|\ge R)\lor erro\ numerico$
 25. Score de mascara: $score=0.7\cdot fill - 0.3\cdot entropy/8$; rejeita $fill<0.03$ ou $fill>0.92$
 26. Selecao de metodo: $mascara=\arg\max_{m\in\{OTSU,ADAPTIVE,CANNY\}} score(m)$
-27. Validacao de contorno: $Area\ge100,\ bw/bh\ge20,\ circularidade>0.5,\ convexidade>0.7$
+27. Validacao de contorno: $Area\ge100,\ bw\ge20,\ bh\ge20,\ circularidade>0.5,\ convexidade>0.7$
 28. Fallback geometrico: $tolerancia=\max(5.0,\ 0.15\cdot height)$
 
 ---

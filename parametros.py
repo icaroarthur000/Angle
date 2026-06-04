@@ -2,6 +2,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+# =================================================================
+# MÓDULO: parametros.py
+# Gerencia config.json em runtime: leitura, escrita e cache em memória.
+# obter(nome, fallback): ponto de acesso único usado por todos os módulos.
+# =================================================================
+
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 
 DEFAULTS: Dict[str, Any] = {

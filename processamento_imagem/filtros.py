@@ -1,6 +1,15 @@
 import cv2
 import numpy as np
 
+# =================================================================
+# MÓDULO: processamento_imagem/filtros.py
+# Binarização da imagem de entrada por três métodos:
+#   OTSU     — threshold global por máxima entropia inter-classe
+#   CANNY    — detecção de bordas por gradiente duplo-limiar
+#   ADAPTIVE — threshold local gaussiano (iluminação não uniforme)
+# aplicar_multi_threshold: seleciona automaticamente o melhor dos três
+# =================================================================
+
 
 def preprocessar_imagem_robusto(imagem):
     """Melhora contraste local e reduz sensibilidade a iluminação irregular."""
@@ -20,7 +29,7 @@ def aplicar_filtro_binary_otsu(imagem):
     gray = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     _, bin_img = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    bin_img = _fechar_mascara(bin_img, (5, 5), iterations=1)
+    bin_img = _fechar_mascara(bin_img, (3, 3), iterations=1)
     return gray, bin_img
 
 
@@ -58,6 +67,7 @@ def aplicar_preprocessamento_clahe(imagem):
 
 
 def _score_mascara(bin_img):
+    """Score de qualidade da máscara: penaliza preenchimento extremo e alta entropia."""
     total_pixels = float(bin_img.shape[0] * bin_img.shape[1])
     white_pixels = float(np.count_nonzero(bin_img == 255))
     fill_ratio = white_pixels / total_pixels if total_pixels else 0.0

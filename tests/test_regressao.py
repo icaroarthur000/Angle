@@ -52,6 +52,17 @@ def test_multi_threshold_retorna_mascara_e_metodo():
     assert metodo in {"OTSU", "ADAPTIVE", "CANNY"}
 
 
+def test_contorno_achatado_de_30_graus_nao_e_rejeitado():
+    img = np.zeros((220, 260), dtype=np.uint8)
+    cv2.ellipse(img, (130, 140), (80, 30), 0, 0, 180, 255, -1)
+
+    pts = contorno.encontrar_contorno_gota_robusto(img, substrate_removed=True)
+
+    assert pts is not None
+    assert len(pts) > 100
+    assert int(np.max(pts[:, 1])) >= 168
+
+
 # =========================================================
 # Teste de ROI-invariância + cascata tripla
 # =========================================================
@@ -87,7 +98,7 @@ def test_isolar_gota_substrato_separa_gota_de_substrato():
     _, bin_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
     # Sem separação, Otsu cola gota + substrato numa massa gigante
-    bin_limpa = contorno.isolar_gota_substrato(gray, bin_otsu)
+    bin_limpa, _ = contorno.isolar_gota_substrato(gray, bin_otsu)
 
     # O substrato (últimas 25 linhas) deve ter sido cortado: quase zero foreground lá
     fg_fundo = int(np.count_nonzero(bin_limpa[-25:, :]))
@@ -125,3 +136,38 @@ def test_roi_invariancia_angulo():
     assert len(angulos) >= 2, f"Apenas {len(angulos)} ROIs produziram ângulo válido"
     variacao = max(angulos) - min(angulos)
     assert variacao <= 2.0, f"Variação de ângulo entre ROIs = {variacao:.2f}° (máx permitido: 2°)"
+
+
+def test_ponto_fora_do_contorno_e_corrigido():
+    """Ponto fora do contorno deve ser projetado para a faixa de contato."""
+    t = np.linspace(0, np.pi, 220)
+    cx, cy, r = 100.0, 80.0, 60.0
+    contorno_pts = np.stack([cx + r * np.cos(t), cy + r * np.sin(t)], axis=1)
+    baseline_y = float(np.max(contorno_pts[:, 1]))
+
+    ponto_fora = [100.0, baseline_y + 20.0]
+    ponto_corrigido, foi_corrigido = contorno.projetar_ponto_no_contorno(
+        ponto_fora, contorno_pts, baseline_y, tolerancia_px=2.0, faixa_baseline_px=30.0
+    )
+
+    assert foi_corrigido is True
+    dists = np.hypot(contorno_pts[:, 0] - ponto_corrigido[0], contorno_pts[:, 1] - ponto_corrigido[1])
+    assert float(np.min(dists)) <= 2.0
+    assert ponto_corrigido[1] >= (baseline_y - 30.0)
+
+
+def test_ponto_dentro_da_tolerancia_nao_e_alterado():
+    """Ponto já válido próximo do contorno não deve ser alterado."""
+    t = np.linspace(0, np.pi, 220)
+    cx, cy, r = 100.0, 80.0, 60.0
+    contorno_pts = np.stack([cx + r * np.cos(t), cy + r * np.sin(t)], axis=1)
+    baseline_y = float(np.max(contorno_pts[:, 1]))
+
+    idx = int(np.argmax(contorno_pts[:, 1]))
+    ponto_valido = [float(contorno_pts[idx, 0]), float(contorno_pts[idx, 1])]
+    ponto_final, foi_corrigido = contorno.projetar_ponto_no_contorno(
+        ponto_valido, contorno_pts, baseline_y, tolerancia_px=2.0, faixa_baseline_px=30.0
+    )
+
+    assert foi_corrigido is False
+    assert np.allclose(ponto_final, ponto_valido)

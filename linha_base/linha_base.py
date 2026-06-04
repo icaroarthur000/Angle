@@ -1,4 +1,4 @@
-import cv2
+﻿import cv2
 import numpy as np
 from typing import Tuple, Optional, Dict, List
 from parametros import obter
@@ -86,35 +86,76 @@ def _fit_line_robusta(pontos: np.ndarray, debug: bool = False) -> Tuple[float, O
 # BLOCO 1: DETECÇÃO DA BASELINE - FLOOR-SEEKER (NOVO)
 # =================================================================
 
-def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30, debug: bool = False) -> Tuple[float, Optional[Tuple]]:
-    
+def detect_baseline_tls(
+    gota_pts: np.ndarray,
+    mascara=None,
+    debug: bool = False,
+) -> Tuple[float, Optional[Tuple]]:
+    """Detecta a baseline pelo perfil inferior da máscara limpa ou do contorno.
+
+    Quando `mascara` (binária, apenas gota) é fornecida:
+      - Para cada coluna X com foreground → pixel mais baixo (max Y)
+      - baseline_y = mediana do perfil: robusto a spikes isolados, sem limiares fixos
+      - slope = np.polyfit de 1° grau: captura inclinação real do substrato
+      - line_params usa esse slope → reta vermelha acompanha o substrato
+
+    Fallback (sem máscara): percentil 99.5 dos Y do contorno.
+    """
     if gota_pts is None or len(gota_pts) < 5:
         return 0.0, None
 
     y_vals = gota_pts[:, 1].astype(np.float64)
-    y_max = float(np.max(y_vals))
-    q = float(np.clip(1.0 - max(0.02, min(0.5, BASELINE_BOTTOM_FRACTION)), 0.0, 1.0))
-    y_cut = float(np.quantile(y_vals, q))
-    floor_pts = gota_pts[y_vals >= y_cut]
+    x_vals = gota_pts[:, 0].astype(np.float64)
 
-    baseline_y, line_params, n_inliers = _fit_line_robusta(floor_pts, debug=debug)
-    if line_params is not None and np.isfinite(baseline_y):
-        vx, vy, x0, _ = line_params
-        return baseline_y, (float(vx), float(vy), float(x0), float(baseline_y))
+    # ------------------------------------------------------------------
+    # Caminho principal: análise por coluna sobre a máscara limpa
+    # ------------------------------------------------------------------
+    if mascara is not None and mascara.ndim == 2 and np.any(mascara > 0):
+        msk = mascara > 0
+        col_xs, col_ys = [], []
+        for xi in range(msk.shape[1]):
+            rows = np.where(msk[:, xi])[0]
+            if len(rows) > 0:
+                col_xs.append(float(xi))
+                col_ys.append(float(rows[-1]))  # pixel mais baixo desta coluna
 
-    # Fallback conservador para não quebrar fluxo legado
-    tolerance = 5.0
-    near_floor = gota_pts[np.abs(gota_pts[:, 1] - y_max) <= tolerance]
-    if len(near_floor) < 2:
-        x0 = float(np.mean(gota_pts[:, 0]))
-        if debug:
-            print("[BASELINE ROBUSTA] fallback extremo acionado")
-        return y_max, (1.0, 0.0, x0, y_max)
+        if len(col_xs) >= 3:
+            bx = np.array(col_xs)
+            by = np.array(col_ys)
 
-    x0 = float(np.mean(near_floor[:, 0]))
+            # percentile 99.5 do perfil inferior: robusto a poucos outliers,
+            # mas captura o ponto mais baixo real (linha de contato) ao contrário
+            # de np.median, que daria o centro da curva inferior da gota.
+            baseline_y = float(np.percentile(by, 99.5))
+
+            try:
+                slope = float(np.polyfit(bx, by, 1)[0])
+            except Exception:
+                slope = 0.0
+
+            vx, vy = safe_normalize(1.0, slope)
+            x0 = float(np.mean(bx))
+
+            if debug:
+                print(f"[BASELINE COLUNA] baseline_y={baseline_y:.2f} | "
+                      f"slope={slope:.5f} | colunas={len(bx)}")
+
+            return baseline_y, (float(vx), float(vy), float(x0), float(baseline_y))
+
+    # ------------------------------------------------------------------
+    # Fallback: percentil 99.5 dos Y do contorno
+    # ------------------------------------------------------------------
+    baseline_y = float(np.percentile(y_vals, 99.5))
+
+    near = gota_pts[y_vals >= (baseline_y - 2.0)]
+    if len(near) < 1:
+        near = gota_pts
+    x0 = (float(np.min(near[:, 0])) + float(np.max(near[:, 0]))) / 2.0
+
     if debug:
-        print(f"[BASELINE ROBUSTA] fallback simples: y={y_max:.2f}, inliers={n_inliers}")
-    return float(y_max), (1.0, 0.0, x0, y_max)
+        print(f"[BASELINE FALLBACK] baseline_y={baseline_y:.2f} | percentil 99.5")
+
+    return baseline_y, (1.0, 0.0, float(x0), float(baseline_y))
 
 
 # =================================================================
@@ -255,13 +296,13 @@ def fallback_geometric(gota_pts: np.ndarray, baseline_y: float, debug: bool = Fa
 # BLOCO 3: PIPELINE MAESTRO (Orquestração)
 # =================================================================
 
-def detectar_baseline_hibrida(gota_pts: np.ndarray, debug: bool = False) -> Dict:
-    
+def detectar_baseline_hibrida(gota_pts: np.ndarray, mascara=None, debug: bool = False) -> Dict:
+
     def _norm_pt(p):
         if p is None:
             return None
         return [float(p[0]), float(p[1])]
-    
+
     if gota_pts is None or len(gota_pts) < 10:
         return {
             'baseline_y': 0.0,
@@ -277,8 +318,8 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray, debug: bool = False) -> Dict
         print("DETECÇÃO - FLOOR-SEEKER + EXTRAPOLAÇÃO")
         print("="*60)
     
-    # 1. Detectar baseline com FLOOR-SEEKER (Y máximo)
-    baseline_y, line_params = detect_baseline_tls(gota_pts, debug=debug)
+    # 1. Detectar baseline com análise por coluna (ou fallback percentil)
+    baseline_y, line_params = detect_baseline_tls(gota_pts, mascara=mascara, debug=debug)
     
     if debug:
         y_max = float(np.max(gota_pts[:, 1]))

@@ -5,6 +5,14 @@ from typing import Dict, Any, Optional, Tuple
 import cv2
 import numpy as np
 
+# =================================================================
+# MÓDULO: processamento_imagem/preprocess.py
+# Pré-processamento avançado com correção de iluminação + CLAHE + threshold adaptativo.
+# preprocess_image_for_contact_angle: pipeline completo (importado mas não usado
+#   diretamente em main.py — main.py usa filtros.py para binarização).
+# save_debug_imgs: único símbolo ativo em produção (salva imagens diagnóstico).
+# =================================================================
+
 
 def estimate_background(img_gray, bg_ksize=None):
     h, w = img_gray.shape[:2]

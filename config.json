@@ -3,7 +3,7 @@
   "baseline_inlier_min_pixels": 2.0,
   "baseline_inlier_mad_scale": 2.5,
   "baseline_refine_iterations": 2,
-  "roi_bottom_exclude": 0.08,
+  "roi_bottom_exclude": 0.02,
   "roi_top_exclude": 0.2,
   "polyfit_degree": 2,
   "min_points_for_fit": 8,
@@ -17,5 +17,6 @@
   "quality_rmse_ref_px": 3.0,
   "quality_min_score": 0.0,
   "quality_max_score": 1.0,
-  "test_angle_tolerance_deg": 1.0
+  "test_angle_tolerance_deg": 1.0,
+  "margem_base_frac": 0.02
 }

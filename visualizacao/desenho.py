@@ -8,14 +8,32 @@ def desenhar_baseline(canvas, baseline_y, ratio, offset_x, offset_y,
     Garante que a linha acompanhe a gota milimetricamente no zoom.
     """
     if baseline_y is None:
-        return
+        return 
 
     # 1. Definir a extensão da linha (do início ao fim da largura da imagem)
-    # Se image_width não for passado, tentamos pegar do canvas, mas o ideal é vir do main
     w_img = image_width if image_width else 1000
 
-    # CORREÇÃO: Ignorar line_params temporariamente
-    # Sempre usar a linha horizontal até corrigir o cálculo de line_params
+    # Usa line_params (vx, vy, x0, y0) se disponível para desenhar linha inclinada.
+    # Se vy ≈ 0 (linha horizontal) ou line_params ausente, usa baseline_y direto.
+    if line_params is not None:
+        try:
+            vx, vy, x0, y0 = line_params
+            if abs(float(vx)) > 1e-9:
+                # Projeta nos extremos horizontais da imagem
+                t_start = (0.0 - float(x0)) / float(vx)
+                t_end   = (float(w_img) - float(x0)) / float(vx)
+                y_at_start = float(y0) + float(vy) * t_start
+                y_at_end   = float(y0) + float(vy) * t_end
+                xs = offset_x
+                xe = offset_x + w_img * ratio
+                ys = y_at_start * ratio + offset_y
+                ye = y_at_end   * ratio + offset_y
+                canvas.create_line(xs, ys, xe, ye, fill="red", width=2, tags="baseline")
+                return
+        except Exception:
+            pass
+
+    # Fallback horizontal
     y_scr = (baseline_y * ratio) + offset_y
     x_start = offset_x
     x_end = offset_x + (w_img * ratio)
@@ -38,6 +56,19 @@ def desenhar_contorno(canvas, gota_pts, to_scr):
         for pt in gota_pts:
             pts_list.extend(to_scr(pt[0], pt[1]))
         canvas.create_line(*pts_list, fill="cyan", width=1, tags="contour")
+    except Exception:
+        pass
+
+
+def desenhar_contorno_destaque(canvas, gota_pts, to_scr, cor="orange", largura=2):
+    """Desenha contorno em destaque quando há correção automática de contato."""
+    if gota_pts is None or len(gota_pts) < 2:
+        return
+    try:
+        pts_list = []
+        for pt in gota_pts:
+            pts_list.extend(to_scr(pt[0], pt[1]))
+        canvas.create_line(*pts_list, fill=cor, width=largura, tags="contour_highlight")
     except Exception:
         pass
 

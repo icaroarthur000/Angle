@@ -1,0 +1,188 @@
+images: 100_geo.png, 130_geo.png, 30_geo.png, 50_geo.png, 75_geo.png
+
+=== 100_geo.png ===
+baseline_y 247.0 p_esq [7.0, 247.0] p_dir [703.0, 247.0] method floor_seeker_hybrid contact_method polynomial_extrapolation
+ 100_geo.png esq local_pts 333 baseline_ajustada 249.35
+  initial circle center -42.95085928260373 -38.63787521191398 R0 77.07632565237373 sigma 7.301735001990214
+  filtered pts 249 of 333
+  final circle center 30.604297354830244 157.89709639743498 R 80.01056508320661
+  dy baseline_y - yc 89.10290360256502 abs 89.10290360256502 R 80.01056508320661
+  baseline outside circle -> polynomial fallback likely
+  x_contato_circle 30.604297354830244 x_contato 7.0
+  slope_result None
+  fallback m_tangente -0.0 theta_deg 0.0
+  y_line_at_xc 247.0 yc 157.89709639743498 yc>y_line_at_xc False
+  theta_deg unchanged 0.0
+  calcular_angulo_circular result 142.54255877130294
+ 100_geo.png dir local_pts 354 baseline_ajustada 249.35
+  initial circle center 45.654582097527815 -44.79551480744458 R0 84.05111529403456 sigma 6.538251798854017
+  filtered pts 268 of 354
+  final circle center 678.8841555942461 152.80298922686825 R 86.6105108347
+  dy baseline_y - yc 94.19701077313175 abs 94.19701077313175 R 86.6105108347
+  baseline outside circle -> polynomial fallback likely
+  x_contato_circle 678.8841555942461 x_contato 703.0
+  slope_result None
+  fallback m_tangente -0.0 theta_deg 0.0
+  y_line_at_xc 247.0 yc 152.80298922686825 yc>y_line_at_xc False
+  theta_deg unchanged 0.0
+  calcular_angulo_circular result 148.2313221143551
+
+=== 130_geo.png ===
+baseline_y 107.0 p_esq [7.0, 107.0] p_dir [520.0, 107.0] method floor_seeker_hybrid contact_method polynomial_extrapolation
+ 130_geo.png esq local_pts 359 baseline_ajustada 108.5
+  initial circle center -44.299384440369614 -97.24811309094476 R0 127.1956745371959 sigma 10.294697122183107
+  filtered pts 267 of 359
+  final circle center 81.48374333297335 -52.33078585791719 R 158.5210145329213
+  dy baseline_y - yc 159.3307858579172 abs 159.3307858579172 R 158.5210145329213
+  baseline outside circle -> polynomial fallback likely
+  x_contato_circle 81.48374333297335 x_contato 7.0
+  slope_result None
+  fallback m_tangente -0.0 theta_deg 0.0
+  y_line_at_xc 107.0 yc -52.33078585791719 yc>y_line_at_xc False
+  theta_deg unchanged 0.0
+  calcular_angulo_circular result 164.30746316834083
+ 130_geo.png dir local_pts 359 baseline_ajustada 108.5
+  initial circle center 7.056676427341623 -0.9687707225985687 R0 60.01319654870214 sigma 19.075554636718422
+  filtered pts 219 of 359
+  final circle center 400.3442432633901 62.6416352509313 R 59.07121224104623
+  dy baseline_y - yc 44.3583647490687 abs 44.3583647490687 R 59.07121224104623
+  x_contato_circle 439.3537753346071 x_contato 520.0
+  slope_result (np.float64(-0.019513614634249693), array([-2.46271833e-01,  1.45590053e+00,  3.12228486e+03]), array([[520, 107],
+       [421, 107],
+       [459, 107],
+       [458, 107],
+       [450, 107],
+       [449, 107],
+       [460, 107],
+       [451, 107],
+       [506, 106],
+       [507, 106],
+       [513, 106],
+       [512, 106]], dtype=int32))
+  slope m_tangente -0.019513614634249693 theta_deg 1.1179058834941107
+  y_line_at_xc 109.33491632572773 yc 62.6416352509313 yc>y_line_at_xc False
+  theta_deg unchanged 1.1179058834941107
+  calcular_angulo_circular result 1.1179058834941107
+
+=== 30_geo.png ===
+baseline_y 361.0 p_esq [9.0, 361.0] p_dir [679.0, 361.0] method floor_seeker_hybrid contact_method polynomial_extrapolation
+ 30_geo.png esq local_pts 572 baseline_ajustada 364.76
+  initial circle center -30.552449339241623 -7.139323650517906 R0 75.43286482812361 sigma 13.433059357512192
+  filtered pts 371 of 572
+  final circle center 78.07910635792675 282.58742413569627 R 79.50421601721092
+  dy baseline_y - yc 78.41257586430373 abs 78.41257586430373 R 79.50421601721092
+  x_contato_circle 64.9494334436402 x_contato 9.0
+  slope_result (np.float64(-0.013449899125742341), array([-7.535000e+01,  5.432835e+04, -9.792671e+06]), array([[176, 361],
+       [175, 360],
+       [ 41, 359],
+       [ 40, 359],
+       [ 21, 359],
+       [ 20, 359],
+       [ 25, 359],
+       [ 24, 359],
+       [ 17, 359],
+       [ 16, 359],
+       [ 15, 359],
+       [ 14, 359]], dtype=int32))
+  slope m_tangente -0.013449899125742341 theta_deg 0.7705759913455842
+  y_line_at_xc 360.0708929877895 yc 282.58742413569627 yc>y_line_at_xc False
+  theta_deg unchanged 0.7705759913455842
+  calcular_angulo_circular result 0.7705759913455842
+ 30_geo.png dir local_pts 633 baseline_ajustada 364.76
+  initial circle center 36.765000644858084 -6.255764203075103 R0 80.85149957428698 sigma 13.82732933324677
+  filtered pts 461 of 633
+  final circle center 599.8193152292234 284.0745306852095 R 82.19573386092156
+  dy baseline_y - yc 76.92546931479052 abs 76.92546931479052 R 82.19573386092156
+  x_contato_circle 628.7780934429995 x_contato 679.0
+  slope_result (np.float64(0.03221415838344763), array([ 4.22513013e-02,  5.36811732e-01, -5.10402088e+03]), array([[489, 361],
+       [679, 361],
+       [590, 361],
+       [620, 361],
+       [614, 361],
+       [584, 361],
+       [490, 360],
+       [491, 360],
+       [584, 360],
+       [591, 360],
+       [620, 360],
+       [614, 360]], dtype=int32))
+  slope m_tangente 0.03221415838344763 theta_deg 1.8450972413495952
+  y_line_at_xc 358.4492608798844 yc 284.0745306852095 yc>y_line_at_xc False
+  theta_deg unchanged 1.8450972413495952
+  calcular_angulo_circular result 1.8450972413495952
+
+=== 50_geo.png ===
+baseline_y 366.0 p_esq [9.0, 366.0] p_dir [530.0, 366.0] method floor_seeker_hybrid contact_method polynomial_extrapolation
+ 50_geo.png esq local_pts 547 baseline_ajustada 369.5
+  initial circle center -22.302875581260906 -7.589267187133666 R0 62.64232323256546 sigma 12.150582831254319
+  filtered pts 354 of 547
+  final circle center 21.921325348685876 281.5929790724084 R 69.48230771084809
+  dy baseline_y - yc 84.40702092759159 abs 84.40702092759159 R 69.48230771084809
+  baseline outside circle -> polynomial fallback likely
+  x_contato_circle 21.921325348685876 x_contato 9.0
+  slope_result (np.float64(-0.042509038668914055), array([-2.28131929e+00,  1.64640131e+03, -2.96937596e+05]), array([[ 99, 364],
+       [ 99, 363],
+       [ 99, 362],
+       [ 98, 361],
+       [ 97, 360],
+       [ 96, 359],
+       [ 95, 358],
+       [ 95, 357],
+       [ 94, 356],
+       [ 22, 355],
+       [ 23, 355],
+       [ 12, 355]], dtype=int32))
+  slope m_tangente -0.042509038668914055 theta_deg 2.4341230443732447
+  y_line_at_xc 365.4507268810991 yc 281.5929790724084 yc>y_line_at_xc False
+  theta_deg unchanged 2.4341230443732447
+  calcular_angulo_circular result 113.56155783785299
+ 50_geo.png dir local_pts 488 baseline_ajustada 369.5
+  initial circle center 1.620307204562463 -5.674519147843843 R0 55.09705720050784 sigma 12.876779165798263
+  filtered pts 262 of 488
+  final circle center 505.82806486611196 278.4303321333002 R 55.082176568711354
+  dy baseline_y - yc 87.56966786669977 abs 87.56966786669977 R 55.082176568711354
+  baseline outside circle -> polynomial fallback likely
+  x_contato_circle 505.82806486611196 x_contato 530.0
+  slope_result None
+  fallback m_tangente -0.0 theta_deg 0.0
+  y_line_at_xc 366.0 yc 278.4303321333002 yc>y_line_at_xc False
+  theta_deg unchanged 0.0
+  calcular_angulo_circular result 92.37177329216564
+
+=== 75_geo.png ===
+baseline_y 296.0 p_esq [8.0, 296.0] p_dir [608.0, 296.0] method floor_seeker_hybrid contact_method polynomial_extrapolation
+ 75_geo.png esq local_pts 401 baseline_ajustada 298.76
+  initial circle center -41.485197089056385 -24.307060494639753 R0 73.35005623444357 sigma 7.55485328437061
+  filtered pts 294 of 401
+  final circle center 39.88256731937505 211.65905699843464 R 74.82281630469863
+  dy baseline_y - yc 84.34094300156536 abs 84.34094300156536 R 74.82281630469863
+  baseline outside circle -> polynomial fallback likely
+  x_contato_circle 39.88256731937505 x_contato 8.0
+  slope_result None
+  fallback m_tangente -0.0 theta_deg 0.0
+  y_line_at_xc 296.0 yc 211.65905699843464 yc>y_line_at_xc False
+  theta_deg unchanged 0.0
+  calcular_angulo_circular result 142.18147908655703
+ 75_geo.png dir local_pts 437 baseline_ajustada 298.76
+  initial circle center 38.30144667273402 -16.976170822852552 R0 66.85316841042994 sigma 8.188414541863372
+  filtered pts 328 of 437
+  final circle center 589.2664002961574 217.2562142195748 R 70.38538717849448
+  dy baseline_y - yc 78.74378578042521 abs 78.74378578042521 R 70.38538717849448
+  baseline outside circle -> polynomial fallback likely
+  x_contato_circle 589.2664002961574 x_contato 608.0
+  slope_result (np.float64(-0.045375490772335325), array([-3.83291283e-02,  6.52514840e-01,  3.74060051e+03]), array([[575, 296],
+       [574, 296],
+       [573, 296],
+       [572, 296],
+       [579, 296],
+       [578, 296],
+       [577, 296],
+       [576, 296],
+       [599, 295],
+       [598, 295],
+       [597, 295],
+       [596, 295]], dtype=int32))
+  slope m_tangente -0.045375490772335325 theta_deg 2.598042025833026
+  y_line_at_xc 296.8500462804943 yc 217.2562142195748 yc>y_line_at_xc False
+  theta_deg unchanged 2.598042025833026
+  calcular_angulo_circular result 134.41456643722944

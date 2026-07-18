@@ -611,3 +611,26 @@ def encontrar_contorno_gota(imagem_binaria):
     # Remove apenas vazamento horizontal de superfície (quando existir)
     pts_final = _remover_faixa_horizontal_vazada(pts_final, h, w)
     return pts_final if len(pts_final) > 0 else pts
+
+
+def projetar_ponto_no_contorno(ponto, gota_pts, baseline_y,
+                               tolerancia_px=2.0, faixa_baseline_px=30.0):
+    """Valida se ponto está dentro da tolerância do contorno.
+    Se não estiver, projeta para o ponto válido mais próximo na faixa inferior.
+
+    Retorna (ponto_final, corrigido_bool).
+    """
+    if gota_pts is None or len(gota_pts) == 0:
+        return ponto, False
+
+    px, py = float(ponto[0]), float(ponto[1])
+    mask = gota_pts[:, 1] >= (baseline_y - faixa_baseline_px)
+    candidatos = gota_pts[mask] if np.any(mask) else gota_pts
+    dists = np.hypot(candidatos[:, 0] - px, candidatos[:, 1] - py)
+    min_dist = float(np.min(dists))
+
+    if min_dist <= tolerancia_px:
+        return ponto, False
+
+    idx = int(np.argmin(dists))
+    return [float(candidatos[idx, 0]), float(candidatos[idx, 1])], True

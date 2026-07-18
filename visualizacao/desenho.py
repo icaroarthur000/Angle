@@ -81,8 +81,6 @@ def desenhar_tangentes(canvas, p_esq, p_dir, ae, ad, zoom_scale, to_scr):
     Desenha as linhas de tangente nos pontos de contato com proporção visual constante.
     """
     try:
-        import math
-        
         # Define a escala para evitar distorção visual na aproximação
         escala = zoom_scale if zoom_scale and zoom_scale > 0 else 1.0
         length = 50 / escala 
@@ -115,3 +113,31 @@ def desenhar_tangentes(canvas, p_esq, p_dir, ae, ad, zoom_scale, to_scr):
             
     except (TypeError, ValueError, AttributeError) as e:
         logger.warning("Erro na renderização das tangentes: %s", e)
+
+def desenhar_tangente_vetor(canvas, p_contato, vetor, zoom_scale, to_scr):
+    """Desenha a tangente diretamente a partir do vetor calculado."""
+    if p_contato is None or vetor is None or len(p_contato) != 2:
+        return
+    try:
+        escala = zoom_scale if zoom_scale and zoom_scale > 0 else 1.0
+        length = 50 / escala
+        x, y = p_contato
+        vx, vy = vetor
+        x1, y1 = to_scr(x - vx * length, y - vy * length)
+        x2, y2 = to_scr(x + vx * length, y + vy * length)
+        canvas.create_line(x1, y1, x2, y2, fill="blue", width=2, tags="tangent_vector")
+    except (TypeError, ValueError, AttributeError) as e:
+        logger.warning("Erro na renderização da tangente vetorial: %s", e)
+
+
+def desenhar_contorno_destaque(canvas, gota_pts, to_scr, cor="orange", largura=2):
+    """Desenha o contorno em destaque quando um ponto é corrigido."""
+    if gota_pts is None or len(gota_pts) < 2:
+        return
+    try:
+        pts_list = []
+        for pt in gota_pts:
+            pts_list.extend(to_scr(pt[0], pt[1]))
+        canvas.create_line(*pts_list, fill=cor, width=largura, tags="contour_highlight")
+    except (TypeError, ValueError):
+        pass

@@ -177,7 +177,7 @@ def find_contact_points_by_extrapolation(
     
     def extrapolate_side(pts, side_name):
         if len(pts) < MIN_POINTS_FOR_FIT:
-            return None
+            return None, None
         
         try:
             # Polyfit: Y como função de X
@@ -188,19 +188,19 @@ def find_contact_points_by_extrapolation(
             x_contact = poly(baseline_y)
             
             if not np.isfinite(x_contact):
-                return None
+                return None, None
             
             if debug:
-                print(f"[{side_name}] Ponto de contato extrapolado: ({x_contact:.2f}, {baseline_y:.2f})")
-            return [float(x_contact), float(baseline_y)]
+                print(f"[{side_name}] Ponto de contato extrapolado: ({x_contact:.2f}, {baseline_y:.2f}) coeffs={coeffs}")
+            return [float(x_contact), float(baseline_y)], coeffs
         
         except Exception as e:
             if debug:
                 print(f"[{side_name}] Erro no polyfit: {e}")
-            return None
+            return None, None
     
-    p_esq = extrapolate_side(left_pts, "ESQUERDA")
-    p_dir = extrapolate_side(right_pts, "DIREITA")
+    p_esq, coeffs_esq = extrapolate_side(left_pts, "ESQUERDA")
+    p_dir, coeffs_dir = extrapolate_side(right_pts, "DIREITA")
     
     # Se ambos falharam, usar fallback
     if p_esq is None and p_dir is None:
@@ -212,22 +212,14 @@ def find_contact_points_by_extrapolation(
     if p_esq is None and p_dir is not None:
         dist = abs(p_dir[0] - x_center)
         p_esq = [x_center - dist, baseline_y]
+        coeffs_esq = None
         if debug:
             print(f"[ESQUERDA] Espelhado a partir da direita: ({p_esq[0]:.2f}, {p_esq[1]:.2f})")
     
     if p_dir is None and p_esq is not None:
         dist = abs(p_esq[0] - x_center)
         p_dir = [x_center + dist, baseline_y]
-        if debug:
-            print(f"[DIREITA] Espelhado a partir da esquerda: ({p_dir[0]:.2f}, {p_dir[1]:.2f})")
-    
-    return p_esq, p_dir
-
-
-def fallback_geometric(gota_pts: np.ndarray, baseline_y: float, debug: bool = False) -> Tuple[Optional[List[float]], Optional[List[float]]]:
-
-    if debug:
-        print("[FALLBACK] Usando detecção geométrica simples")
+        coeffs_dir = None
     
     y_max = float(np.max(gota_pts[:, 1]))
     y_min = float(np.min(gota_pts[:, 1]))
@@ -311,7 +303,7 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray, debug: bool = False) -> Dict
         line_params = (float(vx), float(vy), float(x0), float(baseline_y))
     
     if debug:
-        print(f"\n✓ RESULTADO FINAL:")
+        print("\n✓ RESULTADO FINAL:")
         print(f"  Baseline Y: {baseline_y:.2f} [Y MÁXIMO DO CONTORNO]")
         print(f"  Ponto Esquerdo: {_norm_pt(p_esq)}")
         print(f"  Ponto Direito: {_norm_pt(p_dir)}")

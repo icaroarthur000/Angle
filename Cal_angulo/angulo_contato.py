@@ -68,6 +68,59 @@ def ajustar_circulo_algebrico(pontos: np.ndarray) -> Tuple[float, float, float]:
     
     return float(xc), float(yc), float(R)
 
+def _selecionar_pontos_tangente(local_pts: np.ndarray, baseline_y: float) -> np.ndarray:
+    """Seleciona pontos próximos ao contato para ajuste da tangente."""
+    if local_pts is None or len(local_pts) < 3:
+        return np.empty((0, 2), dtype=float)
+
+    # Mantém apenas pontos imediatamente acima da baseline,
+    # onde a curvatura local descreve a tangente.
+    distance_from_baseline = baseline_y - local_pts[:, 1]
+    mask = (distance_from_baseline >= 0.0) & (distance_from_baseline <= 30.0)
+    pts = local_pts[mask]
+
+    if len(pts) == 0:
+        return np.empty((0, 2), dtype=float)
+
+    sorted_idx = np.argsort(distance_from_baseline[mask])
+    pts = pts[sorted_idx[:min(12, len(pts))]]
+    return pts
+
+
+def _calcular_slope_tangente_polynomial(local_pts: np.ndarray, baseline_y: float, lado: str) -> Optional[tuple[float, np.ndarray, np.ndarray]]:
+    """Calcula a inclinação da tangente usando ajuste x = f(y) na região de contato."""
+    if local_pts is None or len(local_pts) < 3:
+        return None
+
+    pts = _selecionar_pontos_tangente(local_pts, baseline_y)
+    if len(pts) < 4:
+        pts = local_pts
+
+    ys = pts[:, 1]
+    xs = pts[:, 0]
+    if np.std(ys) < 1e-6 or np.std(xs) < 1e-6:
+        return None
+
+    # Ajuste quadrático x = a*y^2 + b*y + c para estimar dx/dy no ponto de contato.
+    coeffs = np.polyfit(ys, xs, 2)
+    a, b = coeffs[0], coeffs[1]
+    dx_dy = 2.0 * a * baseline_y + b
+
+    if not np.isfinite(dx_dy):
+        return None
+    if abs(dx_dy) < 1e-9:
+        m_tangente = float("inf")
+    else:
+        m_tangente = 1.0 / dx_dy
+
+    logger.debug(
+        "[TANGENTE] lado=%s pts=%d coeffs=%s dx_dy=%.6f m_tangente=%.6f",
+        lado, len(pts), np.array2string(coeffs, precision=4), dx_dy, m_tangente
+    )
+
+    return m_tangente, coeffs, pts
+
+
 def _calcular_angulo_polynomial_fallback(local_pts: np.ndarray, baseline_y: float, lado: str) -> float:
     """Fallback polinomial (baseado no código anterior)."""
     if local_pts is None or len(local_pts) < 3:
@@ -97,6 +150,73 @@ def _calcular_angulo_polynomial_fallback(local_pts: np.ndarray, baseline_y: floa
     return float(np.clip(theta_deg, 0.0, 180.0))
 
 
+def _normalizar_vetor_tangente(m_tangente: float) -> tuple[float, float]:
+    if not np.isfinite(m_tangente):
+        return 0.0, 1.0
+    vx = 1.0
+    vy = float(m_tangente)
+    norm = math.hypot(vx, vy)
+    if norm < 1e-9:
+        return 1.0, 0.0
+    return vx / norm, vy / norm
+
+
+def calcular_vetor_tangente(
+    gota_pts: np.ndarray,
+    p_esq: Union[list, tuple],
+    p_dir: Union[list, tuple],
+    baseline_y: float,
+    lado: str,
+) -> Optional[tuple[float, float]]:
+    if gota_pts is None or len(gota_pts) < 5:
+        return None
+    if p_esq is None or p_dir is None:
+        return None
+    if lado not in ("esq", "dir"):
+        return None
+
+    altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1])) if len(gota_pts) > 0 else 100.0
+    offset_calibracao = float(np.clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota, ANGLE_BASELINE_OFFSET_MIN, ANGLE_BASELINE_OFFSET_MAX))
+    baseline_ajustada = baseline_y + offset_calibracao
+
+    local_pts = _selecionar_pontos_lado(gota_pts, p_esq, p_dir, baseline_ajustada, lado)
+    if len(local_pts) < 3:
+        return None
+
+    slope_result = _calcular_slope_tangente_polynomial(local_pts, baseline_y, lado)
+    if slope_result is None:
+        return None
+
+    m_tangente, coeffs, pts = slope_result
+    x_contato = float(p_esq[0] if lado == "esq" else p_dir[0])
+
+    a, b, c = coeffs
+    x_expr = f"x(y)={a:.6e}*y^2 + {b:.6e}*y + {c:.6e}"
+    dx_dy = 2.0 * a * baseline_y + b
+
+    if np.isfinite(m_tangente):
+        dy_dx = f"{m_tangente:.6f}"
+    else:
+        dy_dx = "inf"
+
+    vx, vy = _normalizar_vetor_tangente(m_tangente)
+    norm = math.hypot(vx, vy)
+    angle_deg = math.degrees(math.atan2(vy, vx))
+
+    side_name = "Ponto esquerdo" if lado == "esq" else "Ponto direito"
+    print(f"==== TANGENTE {side_name.upper()} ====")
+    print("Polinômio:", x_expr)
+    print("Derivada dx/dy:", f"{dx_dy:.6f}")
+    print("m (dy/dx):", dy_dx)
+    print("vx =", f"{vx:.6f}")
+    print("vy =", f"{vy:.6f}")
+    print("norma =", f"{norm:.6f}")
+    print("ângulo vetor =", f"{angle_deg:.6f}°")
+    print()
+
+    return vx, vy
+
+
 def _selecionar_pontos_lado(
     gota_pts: np.ndarray,
     p_esq: Union[list, tuple],
@@ -106,7 +226,9 @@ def _selecionar_pontos_lado(
 ) -> np.ndarray:
     altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1])) if len(gota_pts) > 0 else 100.0
     window_height = int(np.clip(ANGLE_WINDOW_HEIGHT_FACTOR * altura_gota, ANGLE_WINDOW_HEIGHT_MIN, ANGLE_WINDOW_HEIGHT_MAX))
-    mask = (gota_pts[:, 1] < baseline_ajustada - 3) & (gota_pts[:, 1] > baseline_ajustada - window_height)
+    # Usa a janela de análise fixa para capturar a região de contato.
+    top_limit = float(baseline_ajustada - 1.0)
+    mask = (gota_pts[:, 1] <= baseline_ajustada) & (gota_pts[:, 1] > baseline_ajustada - window_height)
     local_pts = gota_pts[mask]
     center_x_approx = (p_esq[0] + p_dir[0]) / 2
     if lado == "esq":
@@ -174,6 +296,9 @@ def calcular_angulo_circular(
     # --- CALIBRAÇÃO ADAPTATIVA DE BASELINE ---
     altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1])) if len(gota_pts) > 0 else 100.0
     offset_calibracao = float(np.clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota, ANGLE_BASELINE_OFFSET_MIN, ANGLE_BASELINE_OFFSET_MAX))
+    # Em coordenadas de imagem, valores Y maiores estão abaixo.
+    # Para analisar a borda da gota acima da linha de contato, deslocamos a
+    # janela de seleção um pouco para baixo (Y maior) em relação à baseline.
     baseline_ajustada = baseline_y + offset_calibracao
 
     # Janela de análise com base na linha ajustada
@@ -222,31 +347,44 @@ def calcular_angulo_circular(
             return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
 
         # 2. Ponto de Contato de Sub-pixel (Interseção Círculo-Reta)
-        dy = baseline_ajustada - yc
-        
+        # A curva foi ajustada usando uma janela próxima à baseline para robustez,
+        # mas o ângulo deve ser medido na baseline física real.
+        dy = baseline_y - yc
+
         # Verificação se a baseline está fora do círculo
         if abs(dy) >= R:
             logger.warning("Baseline fora do círculo.")
             return _calcular_angulo_polynomial_fallback(local_pts, baseline_ajustada, lado)
-        
+
         dx = math.sqrt(max(0.0, R**2 - dy**2))
-        x_contato = xc - dx if lado == "esq" else xc + dx
+        x_contato_circle = xc - dx if lado == "esq" else xc + dx
+        x_contato = float(p_esq[0] if lado == "esq" else p_dir[0])
 
-        # 3. Derivada Implícita (Inclinação da Tangente)
-        numerador = x_contato - xc
-        denominador = baseline_ajustada - yc
-        
-        if denominador == 0:
-            theta_deg = 90.0
+        # 3. Derivada da tangente: usa ajuste local x = f(y) na região de contato.
+        slope_result = _calcular_slope_tangente_polynomial(local_pts, baseline_y, lado)
+        if slope_result is None:
+            numerador = x_contato_circle - xc
+            denominador = baseline_y - yc
+            if denominador == 0:
+                theta_deg = 90.0
+            else:
+                m_tangente = -numerador / denominador
+                theta_deg = math.degrees(math.atan(abs(m_tangente)))
         else:
-            m_tangente = -numerador / denominador
-            theta_rad = math.atan(abs(m_tangente))
-            theta_deg = math.degrees(theta_rad)
+            m_tangente, coeffs, pts = slope_result
+            theta_deg = math.degrees(math.atan(abs(m_tangente)))
+            logger.debug(
+                "[TANGENTE POLYFIT] lado=%s baseline=%.2f slope=%.4f",
+                lado, baseline_y, m_tangente
+            )
 
-        # 4. Ajuste de Quadrante (Hidrofóbico vs Hidrofílico)
-        if yc > baseline_ajustada:
+        # 4. Escolha do ângulo interno/external: o ângulo interno deve ser
+        # medido na face do líquido, ou seja, no lado do tangente onde
+        # está o centro do círculo estimado.
+        y_line_at_xc = baseline_y + m_tangente * (xc - x_contato)
+        if yc > y_line_at_xc:
             theta_deg = 180.0 - theta_deg
-            
+
         # --- DEBUG ---
         logger.debug(
             "[GONIOMETRIA %s] R=%.2f xc=%.2f yc=%.2f baseline_adj=%.2f angulo=%.2f°",

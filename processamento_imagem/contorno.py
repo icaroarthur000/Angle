@@ -425,7 +425,7 @@ def _margens_adaptativas(h: int, w: int):
     """Define margens de proteção proporcionais ao tamanho da ROI."""
     base = min(h, w)
     side = max(6, int(0.02 * base))
-    bottom = max(8, int(0.025 * h))
+    bottom = max(2, int(0.005 * h))
     top = max(1, int(0.004 * h))
     return top, side, bottom
 
@@ -625,7 +625,8 @@ def projetar_ponto_no_contorno(ponto, gota_pts, baseline_y,
 
     px, py = float(ponto[0]), float(ponto[1])
     mask = gota_pts[:, 1] >= (baseline_y - faixa_baseline_px)
-    candidatos = gota_pts[mask] if np.any(mask) else gota_pts
+    candidatos_faixa = gota_pts[mask] if np.any(mask) else gota_pts
+    candidatos = candidatos_faixa if len(candidatos_faixa) >= 3 else gota_pts
     dists = np.hypot(candidatos[:, 0] - px, candidatos[:, 1] - py)
     min_dist = float(np.min(dists))
 

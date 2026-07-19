@@ -978,6 +978,9 @@ class ContactAngleApp(ctk.CTkToplevel):
         if self.p_dir is not None:
             self.p_dir = [float(self.p_dir[0]), float(self.p_dir[1])]
 
+        # Garante que a primeira análise já use contatos aderidos ao contorno.
+        self._validar_corrigir_pontos_contato(origem="inicial")
+
 
         # DEBUG: ajuda a identificar se os pontos foram detectados corretamente
         print(f"\n{'='*70}")
@@ -1016,40 +1019,6 @@ class ContactAngleApp(ctk.CTkToplevel):
 
             if chao_real > self.baseline_y:
                 self.baseline_y = chao_real
-
-        # --- IDEIA 3: INTERSEÇÃO TEÓRICA VS PIXEL REAL (PADRÃO INDÚSTRIA) ---
-        if self.gota_pts is not None and self.baseline_y is not None:
-            meio_x = np.mean(self.gota_pts[:, 0])
-            h_gota = np.max(self.gota_pts[:, 1]) - np.min(self.gota_pts[:, 1])
-            y_max_contorno = np.max(self.gota_pts[:, 1])
-            
-            y_limite_inf = y_max_contorno - (0.03 * h_gota)
-            y_limite_sup = y_max_contorno - (0.30 * h_gota)
-            
-            lado_esq_completo = self.gota_pts[self.gota_pts[:, 0] < meio_x]
-            lado_dir_completo = self.gota_pts[self.gota_pts[:, 0] >= meio_x]
-            
-            pts_esq_saudavel = self.gota_pts[(self.gota_pts[:, 0] < meio_x) & (self.gota_pts[:, 1] >= y_limite_sup) & (self.gota_pts[:, 1] <= y_limite_inf)]
-            pts_dir_saudavel = self.gota_pts[(self.gota_pts[:, 0] >= meio_x) & (self.gota_pts[:, 1] >= y_limite_sup) & (self.gota_pts[:, 1] <= y_limite_inf)]
-            
-            def ancorar_pela_matematica(pts_parede, pts_completo, y_chao):
-                if len(pts_parede) < 5:
-                    return pts_completo[np.argmax(pts_completo[:, 1])]
-                
-                poly = np.polyfit(pts_parede[:, 1], pts_parede[:, 0], 2)
-                x_teorico = np.polyval(poly, y_chao)
-                
-                distancias = np.hypot(pts_completo[:, 0] - x_teorico, pts_completo[:, 1] - y_chao)
-                idx_min = np.argmin(distancias)
-                return pts_completo[idx_min]
-
-            if len(lado_esq_completo) > 0:
-                p_ideal_esq = ancorar_pela_matematica(pts_esq_saudavel, lado_esq_completo, self.baseline_y)
-                self.p_esq = [float(p_ideal_esq[0]), float(p_ideal_esq[1])]
-                
-            if len(lado_dir_completo) > 0:
-                p_ideal_dir = ancorar_pela_matematica(pts_dir_saudavel, lado_dir_completo, self.baseline_y)
-                self.p_dir = [float(p_ideal_dir[0]), float(p_ideal_dir[1])]
 
         if self.baseline_line_params is not None:
             vx, vy, x0, _ = self.baseline_line_params
@@ -1213,9 +1182,19 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.ae = float(ae) if ae is not None else None
         self.ad = float(ad) if ad is not None else None
 
-        ae_txt = f"{self.ae:.2f}°" if self.ae is not None else "---"
-        ad_txt = f"{self.ad:.2f}°" if self.ad is not None else "---"
-        media = (self.ae + self.ad) / 2 if (self.ae is not None and self.ad is not None) else None
+        self.ae_interna = float(self.ae) if self.ae is not None else None
+        self.ad_interna = float(self.ad) if self.ad is not None else None
+        self.ae_externa = float(180.0 - self.ae) if self.ae is not None else None
+        self.ad_externa = float(180.0 - self.ad) if self.ad is not None else None
+
+        def fmt_duplo(valor_interno, valor_externo):
+            if valor_interno is None or valor_externo is None:
+                return "---"
+            return f"Int {valor_interno:.2f}°\nExt {valor_externo:.2f}°"
+
+        ae_txt = fmt_duplo(self.ae_interna, self.ae_externa)
+        ad_txt = fmt_duplo(self.ad_interna, self.ad_externa)
+        media = (self.ae_interna + self.ad_interna) / 2 if (self.ae_interna is not None and self.ad_interna is not None) else None
         med_txt = f"{media:.2f}°" if media is not None else "---"
 
         self.res_e.configure(text=ae_txt)
@@ -1410,15 +1389,9 @@ class ContactAngleApp(ctk.CTkToplevel):
             if len(pts_lado) > 0:
                 distancias = np.hypot(pts_lado[:, 0] - img_x, pts_lado[:, 1] - img_y)
                 idx_min = np.argmin(distancias)
-                menor_distancia = distancias[idx_min]
-                
-                # O ponto gruda automaticamente no contorno ciano se o rato estiver perto (raio de 10px)
-                if menor_distancia < 10.0:
-                    novo_ponto = [float(pts_lado[idx_min, 0]), float(pts_lado[idx_min, 1])]
-                    self._ativar_destaque_contorno(300)
-                else:
-                    # Se o utilizador puxar o rato para longe, o ponto fica livre
-                    novo_ponto = [float(img_x), float(img_y)]
+                # Os pontos de contato devem permanecer presos ao contorno.
+                novo_ponto = [float(pts_lado[idx_min, 0]), float(pts_lado[idx_min, 1])]
+                self._ativar_destaque_contorno(300)
             else:
                 novo_ponto = [float(img_x), float(img_y)]
         else:

@@ -68,7 +68,7 @@ def ajustar_circulo_algebrico(pontos: np.ndarray) -> Tuple[float, float, float]:
     
     return float(xc), float(yc), float(R)
 
-def _selecionar_pontos_tangente(local_pts: np.ndarray, baseline_y: float) -> np.ndarray:
+def _selecionar_pontos_tangente(local_pts: np.ndarray, baseline_y: float, p_contato: Optional[Union[list, tuple]] = None) -> np.ndarray:
     """Seleciona pontos próximos ao contato para ajuste da tangente."""
     if local_pts is None or len(local_pts) < 3:
         return np.empty((0, 2), dtype=float)
@@ -76,23 +76,28 @@ def _selecionar_pontos_tangente(local_pts: np.ndarray, baseline_y: float) -> np.
     # Mantém apenas pontos imediatamente acima da baseline,
     # onde a curvatura local descreve a tangente.
     distance_from_baseline = baseline_y - local_pts[:, 1]
-    mask = (distance_from_baseline >= 0.0) & (distance_from_baseline <= 30.0)
+    mask = (distance_from_baseline > 1.0) & (distance_from_baseline <= 30.0)
     pts = local_pts[mask]
 
     if len(pts) == 0:
         return np.empty((0, 2), dtype=float)
 
-    sorted_idx = np.argsort(distance_from_baseline[mask])
+    if p_contato is not None and len(p_contato) >= 2:
+        contato_x = float(p_contato[0])
+        tie_break = np.abs(pts[:, 0] - contato_x)
+        sorted_idx = np.lexsort((tie_break, distance_from_baseline[mask]))
+    else:
+        sorted_idx = np.argsort(distance_from_baseline[mask])
     pts = pts[sorted_idx[:min(12, len(pts))]]
     return pts
 
 
-def _calcular_slope_tangente_polynomial(local_pts: np.ndarray, baseline_y: float, lado: str) -> Optional[tuple[float, np.ndarray, np.ndarray]]:
+def _calcular_slope_tangente_polynomial(local_pts: np.ndarray, baseline_y: float, lado: str, p_contato: Optional[Union[list, tuple]] = None) -> Optional[tuple[float, np.ndarray, np.ndarray]]:
     """Calcula a inclinação da tangente usando ajuste x = f(y) na região de contato."""
     if local_pts is None or len(local_pts) < 3:
         return None
 
-    pts = _selecionar_pontos_tangente(local_pts, baseline_y)
+    pts = _selecionar_pontos_tangente(local_pts, baseline_y, p_contato)
     if len(pts) < 4:
         pts = local_pts
 
@@ -183,7 +188,8 @@ def calcular_vetor_tangente(
     if len(local_pts) < 3:
         return None
 
-    slope_result = _calcular_slope_tangente_polynomial(local_pts, baseline_y, lado)
+    contato = p_esq if lado == "esq" else p_dir
+    slope_result = _calcular_slope_tangente_polynomial(local_pts, baseline_y, lado, contato)
     if slope_result is None:
         return None
 
@@ -361,7 +367,8 @@ def calcular_angulo_circular(
         x_contato = float(p_esq[0] if lado == "esq" else p_dir[0])
 
         # 3. Derivada da tangente: usa ajuste local x = f(y) na região de contato.
-        slope_result = _calcular_slope_tangente_polynomial(local_pts, baseline_y, lado)
+        contato = p_esq if lado == "esq" else p_dir
+        slope_result = _calcular_slope_tangente_polynomial(local_pts, baseline_y, lado, contato)
         if slope_result is None:
             numerador = x_contato_circle - xc
             denominador = baseline_y - yc

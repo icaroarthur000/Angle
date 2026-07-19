@@ -292,16 +292,6 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray, debug: bool = False) -> Dict
     # 2. Encontrar pontos de contato via extrapolação polinomial
     p_esq, p_dir = find_contact_points_by_extrapolation(gota_pts, baseline_y, debug=debug)
     
-    # 3. Refinar line_params baseado nos pontos finais
-    # ⚠️ MAS NÃO SOBRESCREVER baseline_y! Já temos o valor correto (Y_max)
-    if p_esq is not None and p_dir is not None:
-        dx = p_dir[0] - p_esq[0]
-        dy = p_dir[1] - p_esq[1]
-        vx, vy = safe_normalize(dx, dy)
-        x0 = (p_esq[0] + p_dir[0]) / 2.0
-        # Mantém baseline_y original (Y máximo do contorno)
-        line_params = (float(vx), float(vy), float(x0), float(baseline_y))
-    
     if debug:
         print("\n✓ RESULTADO FINAL:")
         print(f"  Baseline Y: {baseline_y:.2f} [Y MÁXIMO DO CONTORNO]")

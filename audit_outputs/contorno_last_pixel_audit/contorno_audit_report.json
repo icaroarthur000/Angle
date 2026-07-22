@@ -1,0 +1,202 @@
+[
+  {
+    "image": "100_geo.png",
+    "mask_method": "OTSU",
+    "fallback_used": false,
+    "top_margin": 1,
+    "side_margin": 6,
+    "bottom_margin": 2,
+    "stages": {
+      "mask_binary": {
+        "points": 1664,
+        "y_min": 36.0,
+        "y_max": 314.0,
+        "baseline_y": 256.0,
+        "gap_to_baseline": -58.0
+      },
+      "after_substrate_removal": {
+        "points": 1196,
+        "y_min": 36.0,
+        "y_max": 256.0,
+        "baseline_y": 256.0,
+        "gap_to_baseline": 0.0
+      },
+      "processed_before_final_filter": {
+        "points": 1196,
+        "y_min": 36.0,
+        "y_max": 256.0,
+        "baseline_y": 256.0,
+        "gap_to_baseline": 0.0
+      },
+      "after_final_filter": {
+        "points": 1196,
+        "y_min": 36.0,
+        "y_max": 256.0,
+        "baseline_y": 256.0,
+        "gap_to_baseline": 0.0
+      }
+    },
+    "baseline_y": 256.0,
+    "clean_has_bottom_pixels": 256
+  },
+  {
+    "image": "130_geo.png",
+    "mask_method": "OTSU",
+    "fallback_used": false,
+    "top_margin": 1,
+    "side_margin": 6,
+    "bottom_margin": 2,
+    "stages": {
+      "mask_binary": {
+        "points": 1238,
+        "y_min": 57.0,
+        "y_max": 221.0,
+        "baseline_y": NaN,
+        "gap_to_baseline": NaN
+      },
+      "after_substrate_removal": {
+        "points": 1238,
+        "y_min": 57.0,
+        "y_max": 221.0,
+        "baseline_y": NaN,
+        "gap_to_baseline": NaN
+      },
+      "processed_before_final_filter": {
+        "points": 0,
+        "y_min": null,
+        "y_max": null,
+        "baseline_y": NaN,
+        "gap_to_baseline": null
+      },
+      "after_final_filter": {
+        "points": 0,
+        "y_min": null,
+        "y_max": null,
+        "baseline_y": NaN,
+        "gap_to_baseline": null
+      }
+    },
+    "baseline_y": NaN,
+    "clean_has_bottom_pixels": 221
+  },
+  {
+    "image": "30_geo.png",
+    "mask_method": "OTSU",
+    "fallback_used": false,
+    "top_margin": 1,
+    "side_margin": 8,
+    "bottom_margin": 2,
+    "stages": {
+      "mask_binary": {
+        "points": 2198,
+        "y_min": 13.0,
+        "y_max": 447.0,
+        "baseline_y": 386.0,
+        "gap_to_baseline": -61.0
+      },
+      "after_substrate_removal": {
+        "points": 1148,
+        "y_min": 13.0,
+        "y_max": 386.0,
+        "baseline_y": 386.0,
+        "gap_to_baseline": 0.0
+      },
+      "processed_before_final_filter": {
+        "points": 1148,
+        "y_min": 13.0,
+        "y_max": 386.0,
+        "baseline_y": 386.0,
+        "gap_to_baseline": 0.0
+      },
+      "after_final_filter": {
+        "points": 1148,
+        "y_min": 13.0,
+        "y_max": 386.0,
+        "baseline_y": 386.0,
+        "gap_to_baseline": 0.0
+      }
+    },
+    "baseline_y": 386.0,
+    "clean_has_bottom_pixels": 386
+  },
+  {
+    "image": "50_geo.png",
+    "mask_method": "OTSU",
+    "fallback_used": false,
+    "top_margin": 1,
+    "side_margin": 8,
+    "bottom_margin": 2,
+    "stages": {
+      "mask_binary": {
+        "points": 1705,
+        "y_min": 47.0,
+        "y_max": 439.0,
+        "baseline_y": 376.0,
+        "gap_to_baseline": -63.0
+      },
+      "after_substrate_removal": {
+        "points": 1145,
+        "y_min": 47.0,
+        "y_max": 376.0,
+        "baseline_y": 376.0,
+        "gap_to_baseline": 0.0
+      },
+      "processed_before_final_filter": {
+        "points": 1145,
+        "y_min": 47.0,
+        "y_max": 376.0,
+        "baseline_y": 376.0,
+        "gap_to_baseline": 0.0
+      },
+      "after_final_filter": {
+        "points": 1145,
+        "y_min": 47.0,
+        "y_max": 376.0,
+        "baseline_y": 376.0,
+        "gap_to_baseline": 0.0
+      }
+    },
+    "baseline_y": 376.0,
+    "clean_has_bottom_pixels": 376
+  },
+  {
+    "image": "75_geo.png",
+    "mask_method": "OTSU",
+    "fallback_used": false,
+    "top_margin": 1,
+    "side_margin": 7,
+    "bottom_margin": 2,
+    "stages": {
+      "mask_binary": {
+        "points": 1633,
+        "y_min": 53.0,
+        "y_max": 369.0,
+        "baseline_y": 303.0,
+        "gap_to_baseline": -66.0
+      },
+      "after_substrate_removal": {
+        "points": 1063,
+        "y_min": 53.0,
+        "y_max": 303.0,
+        "baseline_y": 303.0,
+        "gap_to_baseline": 0.0
+      },
+      "processed_before_final_filter": {
+        "points": 1063,
+        "y_min": 53.0,
+        "y_max": 303.0,
+        "baseline_y": 303.0,
+        "gap_to_baseline": 0.0
+      },
+      "after_final_filter": {
+        "points": 1063,
+        "y_min": 53.0,
+        "y_max": 303.0,
+        "baseline_y": 303.0,
+        "gap_to_baseline": 0.0
+      }
+    },
+    "baseline_y": 303.0,
+    "clean_has_bottom_pixels": 303
+  }
+]

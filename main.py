@@ -350,9 +350,9 @@ class SelectionWindow(ctk.CTk):
 
             # Contorno Canny (ciano) — mostra se CANNY ativo
             if use_canny and bin_canny is not None:
-                pts_canny = contorno.encontrar_contorno_gota_robusto(bin_canny)
+                pts_canny = contorno.encontrar_contorno_gota_robusto(bin_canny_filled)
                 if pts_canny is None:
-                    pts_canny = contorno.encontrar_contorno_gota(bin_canny)
+                    pts_canny = contorno.encontrar_contorno_gota(bin_canny_filled)
                 if pts_canny is not None and len(pts_canny) > 0:
                     pts_int = pts_canny.astype(np.int32)
                     pts_int[:, 0] += x1
@@ -1377,7 +1377,7 @@ class ContactAngleApp(ctk.CTkToplevel):
 
         img_x = np.clip(img_x, 0, iw - 1)
 
-        # --- ÍMAN DE CONTORNO ---
+        # ÍMAN DE CONTORNO
         if self.gota_pts is not None:
             meio_x = np.mean(self.gota_pts[:, 0])
             
@@ -1389,7 +1389,8 @@ class ContactAngleApp(ctk.CTkToplevel):
             if len(pts_lado) > 0:
                 distancias = np.hypot(pts_lado[:, 0] - img_x, pts_lado[:, 1] - img_y)
                 idx_min = np.argmin(distancias)
-                # Os pontos de contato devem permanecer presos ao contorno.
+                
+                # FORÇA O PONTO A GRUDAR NO CONTORNO CIANO SEMPRE
                 novo_ponto = [float(pts_lado[idx_min, 0]), float(pts_lado[idx_min, 1])]
                 self._ativar_destaque_contorno(300)
             else:

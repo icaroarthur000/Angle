@@ -216,7 +216,7 @@ def isolar_gota_substrato(img_gray, img_bin):
     # é grande mas o corte é correto.
     bin_limpa = img_bin.copy()
     fg_acima = int(np.count_nonzero(bin_limpa[:y_corte, :]))
-    bin_limpa[y_corte:, :] = 0
+    bin_limpa[y_corte + 1:, :] = 0
 
     # Se restar menos de 300 pixels acima do corte, provavelmente amputou a gota
     if fg_acima < 300:
@@ -305,7 +305,7 @@ def encontrar_contorno_gota_robusto(imagem_binaria):
     # Margens de segurança
     top_margin, side_margin, bottom_margin = _margens_adaptativas(h, w)
     processed[:top_margin, :] = 0
-    processed[max(0, h - bottom_margin):, :] = 0
+    #processed[max(0, h - bottom_margin):, :] = 0
     processed[:, :side_margin] = 0
     processed[:, max(0, w - side_margin):] = 0
     
@@ -315,7 +315,7 @@ def encontrar_contorno_gota_robusto(imagem_binaria):
     if not conts:
         edges = cv2.Canny(img, 30, 100)
         edges[:top_margin, :] = 0
-        edges[max(0, h - bottom_margin):, :] = 0
+        #edges[max(0, h - bottom_margin):, :] = 0
         edges[:, :side_margin] = 0
         edges[:, max(0, w - side_margin):] = 0
         conts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -330,17 +330,17 @@ def encontrar_contorno_gota_robusto(imagem_binaria):
         if _validar_contorno(c, h, w):
             pts = c.reshape(-1, 2)
             
-            # Verifica se toca bordas
+            # Verifica apenas topo e laterais; o fundo pode tocar a base da gota.
             margin = max(4, int(0.01 * min(h, w)))
             touches = (np.any(pts[:, 0] <= margin) or np.any(pts[:, 0] >= w - margin) or
-                      np.any(pts[:, 1] <= margin) or np.any(pts[:, 1] >= h - margin))
+                      np.any(pts[:, 1] <= margin))
             touches_bottom = np.any(pts[:, 1] >= h - margin)
             
             x, y, bw, bh = cv2.boundingRect(c)
             faixa_superficie = (bw > 0.70 * w) and (bh < 0.30 * h) and (y > 0.35 * h)
             ancora_no_fundo = touches_bottom and (bw > 0.60 * w)
             
-            if not touches and not faixa_superficie and not ancora_no_fundo:
+            if not touches and not faixa_superficie:
                 valid_contours.append(c)
     
     if not valid_contours:
@@ -354,7 +354,7 @@ def encontrar_contorno_gota_robusto(imagem_binaria):
     margin = max(6, int(0.02 * min(h, w)))
     valid_mask = (
         (pts[:, 0] > margin) & (pts[:, 0] < w - margin) &
-        (pts[:, 1] > top_margin) & (pts[:, 1] < h - bottom_margin)
+        (pts[:, 1] > top_margin) & (pts[:, 1] < h)
     )
     
     if np.sum(valid_mask) < 10:
@@ -362,7 +362,7 @@ def encontrar_contorno_gota_robusto(imagem_binaria):
     else:
         pts_final = pts[valid_mask]
     
-    pts_final = _remover_faixa_horizontal_vazada(pts_final, h, w)
+    #pts_final = _remover_faixa_horizontal_vazada(pts_final, h, w)#
     return pts_final if len(pts_final) > 0 else None
 
 def _validar_contorno(c, h: int, w: int) -> bool:
@@ -415,7 +415,7 @@ def _validar_contorno(c, h: int, w: int) -> bool:
     if len(fundo) >= 12:
         span_ratio = float((np.max(fundo[:, 0]) - np.min(fundo[:, 0])) / max(1.0, w))
         fundo_ratio = float(len(fundo) / max(1, len(pts)))
-        if y_max > 0.92 * h and span_ratio > 0.75 and fundo_ratio > 0.12:
+        if y_max > 0.92 * h and span_ratio > 0.75 and fundo_ratio > 0.12 and bh < 0.30 * h:
             return False
     
     return True
@@ -537,7 +537,6 @@ def encontrar_contorno_gota(imagem_binaria):
     h, w = processed.shape[:2]
     top_margin, side_margin, bottom_margin = _margens_adaptativas(h, w)
     processed[:top_margin, :] = 0
-    processed[max(0, h - bottom_margin):, :] = 0
     processed[:, :side_margin] = 0
     processed[:, max(0, w - side_margin):] = 0
 
@@ -548,7 +547,6 @@ def encontrar_contorno_gota(imagem_binaria):
     if not conts:
         edges = cv2.Canny(img, 30, 100)
         edges[:top_margin, :] = 0
-        edges[max(0, h - bottom_margin):, :] = 0
         edges[:, :side_margin] = 0
         edges[:, max(0, w - side_margin):] = 0
         conts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -565,21 +563,18 @@ def encontrar_contorno_gota(imagem_binaria):
     for c in conts:
         pts = c.reshape(-1, 2)
         
-        # Verificar se o contorno toca as bordas
+        # Verificar se o contorno toca as bordas laterais ou o topo.
         touches_left = np.any(pts[:, 0] <= margin)
         touches_right = np.any(pts[:, 0] >= w - margin)
         touches_top = np.any(pts[:, 1] <= margin)
-        touches_bottom = np.any(pts[:, 1] >= h - margin)
         
-        # Se tocar 3 ou mais bordas, provavelmente é a borda da imagem (não a gota)
-        border_count = sum([touches_left, touches_right, touches_top, touches_bottom])
+        # Se tocar 3 ou mais dessas bordas, provavelmente é a borda da imagem (não a gota)
+        border_count = sum([touches_left, touches_right, touches_top])
         
         # Rejeita faixa de superfície: muito larga, baixa e achatada.
         x, y, bw, bh = cv2.boundingRect(c)
         faixa_superficie = (bw > 0.70 * w) and (bh < 0.30 * h) and (y > 0.35 * h)
-        ancora_no_fundo = touches_bottom and (bw > 0.60 * w)
-
-        if border_count < MAX_BORDER_TOUCHES and not faixa_superficie and not ancora_no_fundo:
+        if border_count < MAX_BORDER_TOUCHES and not faixa_superficie:
             valid_contours.append(c)
 
     if not valid_contours:
@@ -600,7 +595,7 @@ def encontrar_contorno_gota(imagem_binaria):
     margin = max(6, int(0.02 * min(h, w)))
     valid_mask = (
         (pts[:, 0] > margin) & (pts[:, 0] < w - margin) &  # Esquerda e direita
-        (pts[:, 1] > top_margin) & (pts[:, 1] < h - bottom_margin)     # Topo e fundo
+        (pts[:, 1] > top_margin) & (pts[:, 1] < h)     # Topo e fundo
     )
     
     if np.sum(valid_mask) < 10:  # Se remover muito, não vale a pena
@@ -627,11 +622,27 @@ def projetar_ponto_no_contorno(ponto, gota_pts, baseline_y,
     mask = gota_pts[:, 1] >= (baseline_y - faixa_baseline_px)
     candidatos_faixa = gota_pts[mask] if np.any(mask) else gota_pts
     candidatos = candidatos_faixa if len(candidatos_faixa) >= 3 else gota_pts
+    centro_x = float(np.mean(gota_pts[:, 0]))
+
+    # Mantém o ponto no mesmo lado e força o encaixe na transicao inferior do contorno.
+    if px < centro_x:
+        candidatos_lado = candidatos[candidatos[:, 0] <= centro_x]
+    else:
+        candidatos_lado = candidatos[candidatos[:, 0] >= centro_x]
+
+    if len(candidatos_lado) >= 3:
+        candidatos = candidatos_lado
+
+    y_max = float(np.max(candidatos[:, 1]))
+    candidatos_base = candidatos[candidatos[:, 1] >= (y_max - 1.0)]
+    if len(candidatos_base) >= 1:
+        candidatos = candidatos_base
+
     dists = np.hypot(candidatos[:, 0] - px, candidatos[:, 1] - py)
-    min_dist = float(np.min(dists))
-
-    if min_dist <= tolerancia_px:
-        return ponto, False
-
     idx = int(np.argmin(dists))
-    return [float(candidatos[idx, 0]), float(candidatos[idx, 1])], True
+    ponto_final = [float(candidatos[idx, 0]), float(candidatos[idx, 1])]
+
+    if abs(ponto_final[0] - px) <= tolerancia_px and abs(ponto_final[1] - py) <= tolerancia_px:
+        return ponto_final, False
+
+    return ponto_final, True

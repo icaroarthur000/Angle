@@ -1,7 +1,51 @@
 import math
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def _segmentos_contorno(gota_pts, to_scr, max_gap_img_px: float = 2.5):
+    """Divide o contorno em ramos e remove a faixa inferior de ligação.
+
+    O contorno analisado pode ser fechado, mas para exibição não deve desenhar
+    a ligação inferior nem unir os dois lados por baixo da gota.
+    """
+    if gota_pts is None or len(gota_pts) < 2:
+        return []
+
+    pts = np.asarray(gota_pts, dtype=np.float32).reshape(-1, 2)
+    y_max = float(np.max(pts[:, 1]))
+    y_min = float(np.min(pts[:, 1]))
+    altura = max(1.0, y_max - y_min)
+
+    # Remove a última faixa inferior para evitar o arco que encosta na base.
+    faixa_inferior = max(3.0, 0.015 * altura)
+    pts_visiveis = pts[pts[:, 1] < (y_max - faixa_inferior)]
+    if len(pts_visiveis) < 2:
+        return []
+
+    segmentos = []
+    segmento_atual = []
+    ponto_prev = None
+
+    for pt in pts_visiveis:
+        x_scr, y_scr = to_scr(pt[0], pt[1])
+        ponto_atual = (float(x_scr), float(y_scr))
+
+        if ponto_prev is not None:
+            gap_img = float(np.hypot(float(pt[0] - ponto_prev[0]), float(pt[1] - ponto_prev[1])))
+            if gap_img > max_gap_img_px and len(segmento_atual) >= 4:
+                segmentos.append(segmento_atual)
+                segmento_atual = []
+
+        segmento_atual.extend(ponto_atual)
+        ponto_prev = pt
+
+    if len(segmento_atual) >= 4:
+        segmentos.append(segmento_atual)
+
+    return segmentos
 
 
 def desenhar_baseline(canvas, baseline_y, ratio, offset_x, offset_y,
@@ -50,10 +94,8 @@ def desenhar_contorno(canvas, gota_pts, to_scr):
     if gota_pts is None or len(gota_pts) < 2:
         return
     try:
-        pts_list = []
-        for pt in gota_pts:
-            pts_list.extend(to_scr(pt[0], pt[1]))
-        canvas.create_line(*pts_list, fill="cyan", width=1, tags="contour")
+        for segmento in _segmentos_contorno(gota_pts, to_scr):
+            canvas.create_line(*segmento, fill="cyan", width=1, tags="contour")
     except (TypeError, ValueError) as e:
         logger.debug("desenhar_contorno: %s", e)
 
@@ -135,9 +177,7 @@ def desenhar_contorno_destaque(canvas, gota_pts, to_scr, cor="orange", largura=2
     if gota_pts is None or len(gota_pts) < 2:
         return
     try:
-        pts_list = []
-        for pt in gota_pts:
-            pts_list.extend(to_scr(pt[0], pt[1]))
-        canvas.create_line(*pts_list, fill=cor, width=largura, tags="contour_highlight")
+        for segmento in _segmentos_contorno(gota_pts, to_scr):
+            canvas.create_line(*segmento, fill=cor, width=largura, tags="contour_highlight")
     except (TypeError, ValueError):
         pass

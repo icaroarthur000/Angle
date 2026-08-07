@@ -343,7 +343,7 @@ class SelectionWindow(ctk.CTk):
                     pts_int = pts_otsu.astype(np.int32)
                     pts_int[:, 0] += x1
                     pts_int[:, 1] += y1
-                    cv2.polylines(preview, [pts_int], True, (0, 220, 80), 2)
+                    cv2.polylines(preview, [pts_int], False, (0, 220, 80), 2)
                     for pt in pts_int:
                         cv2.circle(preview, tuple(pt), 2, (0, 255, 180), -1)
 
@@ -357,7 +357,7 @@ class SelectionWindow(ctk.CTk):
                     pts_int = pts_canny.astype(np.int32)
                     pts_int[:, 0] += x1
                     pts_int[:, 1] += y1
-                    cv2.polylines(preview, [pts_int], True, (255, 200, 0), 2)
+                    cv2.polylines(preview, [pts_int], False, (255, 200, 0), 2)
                     for pt in pts_int:
                         cv2.circle(preview, tuple(pt), 2, (255, 220, 80), -1)
 
@@ -812,7 +812,7 @@ class ContactAngleApp(ctk.CTkToplevel):
         # img_bin: máscara binária para processamento (2D uint8, 0/255)
         self.raw_image = img_bgr
         self.bin_image = img_bin
-
+        print("Pixels brancos:", np.count_nonzero(self.bin_image))
 
         # checagens de sanidade
         try:
@@ -920,8 +920,18 @@ class ContactAngleApp(ctk.CTkToplevel):
         """
         # 1. Obtém o contorno da gota através do módulo especializado
         self.gota_pts = contorno.encontrar_contorno_gota_robusto(self.bin_image)
+        
         if self.gota_pts is None:
             self.gota_pts = contorno.encontrar_contorno_gota(self.bin_image)
+            print("\n===== CONTORNO EXTRAÍDO =====")
+            print("Número de pontos:", len(self.gota_pts))
+            print("\n===== DEBUG CONTORNO =====")
+            print("Y máximo do contorno :", np.max(self.gota_pts[:, 1]))
+            print("Baseline             :", self.baseline_y)
+            print("Diferença            :", self.baseline_y - np.max(self.gota_pts[:, 1]))
+            print("==========================\n")
+            print("Menor Y:", np.min(self.gota_pts[:,1]))
+            print("Maior Y:", np.max(self.gota_pts[:,1]))
         if self.gota_pts is None:
             messagebox.showerror("Erro", "Não foi possível detectar a silhueta da gota.")
             return
@@ -936,6 +946,7 @@ class ContactAngleApp(ctk.CTkToplevel):
 
         # 3. Extrai os parâmetros fundamentais da baseline
         self.baseline_y = res['baseline_y']
+        print("Baseline:", self.baseline_y)
         self.baseline_line_params = res.get('line_params')
         self.baseline_method = res.get('method')
 
@@ -1017,8 +1028,12 @@ class ContactAngleApp(ctk.CTkToplevel):
 
             chao_real = float(max(y_esq, y_dir))
 
-            if chao_real > self.baseline_y:
-                self.baseline_y = chao_real
+            # Aceita apenas refinamento local. Evita que artefatos do fundo
+            # empurrem a baseline para o rodapé em gotas de ângulo alto.
+            limite_refino = max(2.0, 0.03 * gray_raw.shape[0])
+            if self.baseline_y is not None and np.isfinite(self.baseline_y):
+                if 0.0 < (chao_real - self.baseline_y) <= limite_refino:
+                    self.baseline_y = chao_real
 
         if self.baseline_line_params is not None:
             vx, vy, x0, _ = self.baseline_line_params
@@ -1195,7 +1210,12 @@ class ContactAngleApp(ctk.CTkToplevel):
         ae_txt = fmt_duplo(self.ae_interna, self.ae_externa)
         ad_txt = fmt_duplo(self.ad_interna, self.ad_externa)
         media = (self.ae_interna + self.ad_interna) / 2 if (self.ae_interna is not None and self.ad_interna is not None) else None
-        med_txt = f"{media:.2f}°" if media is not None else "---"
+        media_externa = float(180.0 - media) if media is not None else None
+
+        if media is None or media_externa is None:
+            med_txt = "---"
+        else:
+            med_txt = f"Int {media:.2f}°\nExt {media_externa:.2f}°"
 
         self.res_e.configure(text=ae_txt)
         self.res_d.configure(text=ad_txt)

@@ -85,6 +85,43 @@ def _fit_line_robusta(pontos: np.ndarray, debug: bool = False) -> Tuple[float, O
 
     return baseline_y, (vx, vy, x0, y0), int(len(inliers))
 
+
+def _selecionar_canto_contato(
+    candidatos: np.ndarray,
+    lado: str,
+    baseline_y: float,
+    x_center_ref: float,
+) -> List[float]:
+    """Escolhe o ponto de contato que mais parece uma quina física da gota.
+
+    A regra favorece o ponto mais baixo do lado, mas também exige que ele seja
+    uma extremidade lateral do ramo inferior, e não apenas um ponto qualquer da
+    faixa de base.
+    """
+    if candidatos is None or len(candidatos) == 0:
+        return [float(x_center_ref), float(baseline_y)]
+
+    pts = np.asarray(candidatos, dtype=np.float64).reshape(-1, 2)
+    y_max = float(np.max(pts[:, 1]))
+    y_min = float(np.min(pts[:, 1]))
+    altura = max(1.0, y_max - y_min)
+
+    # O ponto de contato deve sair do extremo real do ramo inferior.
+    # Primeiro limitamos ao último trecho vertical da gota e depois pegamos
+    # a borda lateral mais externa desse trecho.
+    banda_inferior = max(2.0, 0.06 * altura)
+    faixa = pts[pts[:, 1] >= (y_max - banda_inferior)]
+    if len(faixa) < 2:
+        faixa = pts
+
+    if lado == "esq":
+        idx = int(np.lexsort((faixa[:, 1], faixa[:, 0]))[0])
+    else:
+        idx = int(np.lexsort((faixa[:, 1], -faixa[:, 0]))[0])
+
+    melhor = faixa[idx]
+    return [float(melhor[0]), float(baseline_y)]
+
 # =================================================================
 # BLOCO 1: DETECÇÃO DA BASELINE - FLOOR-SEEKER (NOVO)
 # =================================================================
@@ -120,6 +157,29 @@ def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30, deb
     return float(y_max), (1.0, 0.0, x0, y_max)
 
 
+def fallback_geometric(gota_pts: np.ndarray, baseline_y: float, debug: bool = False) -> Tuple[Optional[List[float]], Optional[List[float]]]:
+    """Fallback geométrico compatível para os dois pontos de contato."""
+    if gota_pts is None or len(gota_pts) < 2:
+        return None, None
+
+    pts = np.asarray(gota_pts, dtype=np.float64).reshape(-1, 2)
+    x_center = float(np.mean(pts[:, 0]))
+    y_max = float(np.max(pts[:, 1]))
+    altura = max(1.0, y_max - float(np.min(pts[:, 1])))
+    banda = max(2.0, 0.12 * altura)
+    candidatos = pts[pts[:, 1] >= (y_max - banda)]
+    if len(candidatos) < 2:
+        candidatos = pts
+
+    p_esq = _selecionar_canto_contato(candidatos[candidatos[:, 0] <= x_center], "esq", baseline_y, x_center)
+    p_dir = _selecionar_canto_contato(candidatos[candidatos[:, 0] >= x_center], "dir", baseline_y, x_center)
+
+    if debug:
+        print(f"[FALLBACK GEOM] esq={p_esq} dir={p_dir}")
+
+    return p_esq, p_dir
+
+
 # =================================================================
 # BLOCO 2: EXTRAPOLAÇÃO POLINOMIAL (Método Científico)
 # =================================================================
@@ -135,6 +195,94 @@ def find_contact_points_by_extrapolation(
     """
     MÉTODO CIENTÍFICO: Extrapolação Polinomial para precisão sub-pixel.
     """
+    def _ancorar_no_extremo_lado(lado: str, baseline_ref: float, x_center_ref: float) -> List[float]:
+        pts = np.asarray(gota_pts, dtype=np.float64).reshape(-1, 2)
+        y_max_ref = float(np.max(pts[:, 1]))
+        y_min_ref = float(np.min(pts[:, 1]))
+        altura_ref = max(1.0, y_max_ref - y_min_ref)
+        banda = max(2.0, 0.06 * altura_ref)
+        mask = pts[:, 1] >= (y_max_ref - banda)
+        indices = np.flatnonzero(mask)
+
+        if len(indices) >= 2:
+            cortes = np.where(np.diff(indices) > 1)[0]
+            inicio = 0
+            melhor_run = indices
+            melhor_len = 0
+            melhor_media_y = -1.0
+            for corte in np.append(cortes, len(indices) - 1):
+                fim = corte + 1
+                run = indices[inicio:fim]
+                inicio = fim
+                if len(run) == 0:
+                    continue
+                media_y = float(np.mean(pts[run, 1]))
+                if len(run) > melhor_len or (len(run) == melhor_len and media_y > melhor_media_y):
+                    melhor_run = run
+                    melhor_len = len(run)
+                    melhor_media_y = media_y
+
+            run_pts = pts[melhor_run]
+            if len(run_pts) >= 2:
+                extremos = np.array([run_pts[0], run_pts[-1]], dtype=np.float64)
+                if lado == "esq":
+                    melhor = extremos[np.argmin(extremos[:, 0])]
+                else:
+                    melhor = extremos[np.argmax(extremos[:, 0])]
+                return [float(melhor[0]), float(baseline_ref)]
+
+        faixa = pts[mask] if np.any(mask) else pts
+        if len(faixa) < 2:
+            faixa = pts
+
+        if lado == "esq":
+            melhor = faixa[np.argmin(faixa[:, 0])]
+        else:
+            melhor = faixa[np.argmax(faixa[:, 0])]
+        return [float(melhor[0]), float(baseline_ref)]
+
+    def _ponto_valido_no_contorno(ponto: Optional[List[float]], lado: str) -> bool:
+        if ponto is None or gota_pts is None or len(gota_pts) < 3:
+            return False
+
+        contorno = np.asarray(gota_pts, dtype=np.float32).reshape(-1, 1, 2)
+        px, py = float(ponto[0]), float(ponto[1])
+        return cv2.pointPolygonTest(contorno, (px, py), True) >= 0.0
+
+    def _fallback_lado(
+        lado: str,
+        baseline_ref: float,
+        y_max_ref: float,
+        height_ref: float,
+        x_center_ref: float,
+    ) -> List[float]:
+        adaptive_tol = max(5.0, 0.15 * height_ref)
+        near_baseline = gota_pts[gota_pts[:, 1] >= (y_max_ref - adaptive_tol)]
+
+        if len(near_baseline) >= 2:
+            if lado == "esq":
+                candidatos = near_baseline[near_baseline[:, 0] <= x_center_ref]
+            else:
+                candidatos = near_baseline[near_baseline[:, 0] >= x_center_ref]
+            if len(candidatos) < 2:
+                candidatos = near_baseline
+            return _selecionar_canto_contato(candidatos, lado, baseline_ref, x_center_ref)
+
+        y_terco = y_max_ref - 0.33 * height_ref
+        terco_inf = gota_pts[gota_pts[:, 1] >= y_terco]
+        if len(terco_inf) >= 2:
+            if lado == "esq":
+                candidatos = terco_inf[terco_inf[:, 0] <= x_center_ref]
+            else:
+                candidatos = terco_inf[terco_inf[:, 0] >= x_center_ref]
+            if len(candidatos) < 2:
+                candidatos = terco_inf
+            return _selecionar_canto_contato(candidatos, lado, baseline_ref, x_center_ref)
+
+        if lado == "esq":
+            return [float(np.min(gota_pts[:, 0])), baseline_ref]
+        return [float(np.max(gota_pts[:, 0])), baseline_ref]
+
     if gota_pts is None or len(gota_pts) < MIN_POINTS_FOR_FIT:
         return None, None
     
@@ -202,56 +350,19 @@ def find_contact_points_by_extrapolation(
     p_esq, coeffs_esq = extrapolate_side(left_pts, "ESQUERDA")
     p_dir, coeffs_dir = extrapolate_side(right_pts, "DIREITA")
     
-    # Se ambos falharam, usar fallback
-    if p_esq is None and p_dir is None:
-        if debug:
-            print("[EXTRAPOLAÇÃO] Ambos os lados falharam, usando fallback geométrico")
-        return fallback_geometric(gota_pts, baseline_y, debug=debug)
-    
-    # Se apenas um lado falhou, espelhar o outro
-    if p_esq is None and p_dir is not None:
-        dist = abs(p_dir[0] - x_center)
-        p_esq = [x_center - dist, baseline_y]
-        coeffs_esq = None
-        if debug:
-            print(f"[ESQUERDA] Espelhado a partir da direita: ({p_esq[0]:.2f}, {p_esq[1]:.2f})")
-    
-    if p_dir is None and p_esq is not None:
-        dist = abs(p_esq[0] - x_center)
-        p_dir = [x_center + dist, baseline_y]
-        coeffs_dir = None
-    
     y_max = float(np.max(gota_pts[:, 1]))
     y_min = float(np.min(gota_pts[:, 1]))
     height = y_max - y_min
 
-    # Tolerância adaptativa: busca pontos nos 15% inferiores do contorno
-    adaptive_tol = max(5.0, 0.15 * height)
-    near_baseline = gota_pts[gota_pts[:, 1] >= (y_max - adaptive_tol)]
-    
-    if len(near_baseline) >= 2:
-        x_center = float(np.mean(gota_pts[:, 0]))
-        # Ponto esquerdo: extremo esquerdo na faixa inferior
-        left_pts = near_baseline[near_baseline[:, 0] <= x_center]
-        right_pts = near_baseline[near_baseline[:, 0] > x_center]
-        x_esq = float(np.min(left_pts[:, 0])) if len(left_pts) > 0 else float(np.min(near_baseline[:, 0]))
-        x_dir = float(np.max(right_pts[:, 0])) if len(right_pts) > 0 else float(np.max(near_baseline[:, 0]))
-        return [x_esq, baseline_y], [x_dir, baseline_y]
-    
-    # Fallback final: extremos horizontais do terço inferior
-    y_terco = y_max - 0.33 * height
-    terco_inf = gota_pts[gota_pts[:, 1] >= y_terco]
-    if len(terco_inf) >= 2:
-        x_center = float(np.mean(gota_pts[:, 0]))
-        left_terco = terco_inf[terco_inf[:, 0] <= x_center]
-        right_terco = terco_inf[terco_inf[:, 0] > x_center]
-        x_min = float(np.min(left_terco[:, 0])) if len(left_terco) > 0 else float(np.min(terco_inf[:, 0]))
-        x_max = float(np.max(right_terco[:, 0])) if len(right_terco) > 0 else float(np.max(terco_inf[:, 0]))
-        return [x_min, baseline_y], [x_max, baseline_y]
+    if p_esq is None and p_dir is None:
+        if debug:
+            print("[EXTRAPOLAÇÃO] Ambos os lados falharam, usando fallback geométrico")
+        return fallback_geometric(gota_pts, baseline_y, debug=debug)
 
-    x_min = float(np.min(gota_pts[:, 0]))
-    x_max = float(np.max(gota_pts[:, 0]))
-    return [x_min, baseline_y], [x_max, baseline_y]
+    p_esq_final = _ancorar_no_extremo_lado("esq", baseline_y, x_center)
+    p_dir_final = _ancorar_no_extremo_lado("dir", baseline_y, x_center)
+
+    return p_esq_final, p_dir_final
 
 
 # =================================================================

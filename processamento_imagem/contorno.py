@@ -182,23 +182,16 @@ def isolar_gota_substrato(img_gray, img_bin):
     if y_sobel > 0 and conf_sobel > 0.0:
         candidatos.append((y_sobel, conf_sobel, "sobel_y"))
 
-    # Fallback seguro: base do contorno morfológico
+    # Fallback seguro: base do contorno morfológico.
+    # Regra física: o Sobel mede a superfície horizontal mais forte da ROI;
+    # o necking mede o afunilamento da gota e só deve entrar quando o Sobel
+    # não estiver suficientemente confiável. O morfológico fica por último.
     y_corte = y_base_morf
 
-    if len(candidatos) >= 2:
-        # Dois métodos concordam?  (tolerância de 8px)
-        y_a, c_a, _ = candidatos[0]
-        y_b, c_b, _ = candidatos[1]
-        if abs(y_a - y_b) <= 8:
-            # Consenso: média ponderada pela confiança
-            peso_total = c_a + c_b
-            y_corte = int((y_a * c_a + y_b * c_b) / max(1e-9, peso_total))
-        else:
-            # Divergência: usa o de maior confiança
-            melhor = max(candidatos, key=lambda t: t[1])
-            y_corte = melhor[0]
-    elif len(candidatos) == 1:
-        y_corte = candidatos[0][0]
+    if y_sobel > 0 and conf_sobel >= 0.90:
+        y_corte = y_sobel
+    elif y_neck > 0 and conf_neck >= 0.70:
+        y_corte = y_neck
 
     # --- Proteção anti-amputação ---
     # Detecta topo real do foreground para calcular altura da gota
@@ -210,20 +203,37 @@ def isolar_gota_substrato(img_gray, img_bin):
         y_minimo_corte = y_topo_fg + int(h_gota * 0.70) if h_gota > 0 else y_corte
         y_corte = max(y_corte, y_minimo_corte)
 
+
     # Segurança final: verifica se a gota ACIMA do corte mantém massa suficiente.
     # Diferente de checar "% total removida", verificamos se o foreground
     # restante (a gota) é significativo — isso evita abortar quando o substrato
-    # é grande mas o corte é correto.
     bin_limpa = img_bin.copy()
     fg_acima = int(np.count_nonzero(bin_limpa[:y_corte, :]))
     bin_limpa[y_corte + 1:, :] = 0
+
+# ===========================
+# DEBUG
+# ===========================
+    print("\n===== DEBUG ISOLAR_GOTA_SUBSTRATO =====")
+    print("y_base_morf :", y_base_morf)
+    print("y_neck      :", y_neck)
+    print("y_sobel     :", y_sobel)
+    print("y_corte     :", y_corte)
+    print("Foreground acima do corte:", fg_acima)
+
+    if len(linhas_fg) > 5:
+        print("Topo da gota :", y_topo_fg)
+        print("Altura gota  :", h_gota)
+
+    print("Pixels removidos abaixo do corte:",
+        np.count_nonzero(img_bin[y_corte + 1:, :]))
+    print("=======================================\n")
 
     # Se restar menos de 300 pixels acima do corte, provavelmente amputou a gota
     if fg_acima < 300:
         return bin_morf
 
-    return bin_limpa
-
+    return bin_limpa# é grande mas o corte é correto.
 
 def remover_substrato_abaixo_superficie(imagem_binaria, img_gray=None):
     """Zera conteúdo abaixo da superfície usando o pipeline de cascata tripla.
@@ -352,17 +362,22 @@ def encontrar_contorno_gota_robusto(imagem_binaria):
     
     # Limpa pontos nas bordas
     margin = max(6, int(0.02 * min(h, w)))
+    print("Y máximo antes:", np.max(pts[:,1]))
+
     valid_mask = (
-        (pts[:, 0] > margin) & (pts[:, 0] < w - margin) &
-        (pts[:, 1] > top_margin) & (pts[:, 1] < h)
+        (pts[:, 0] > margin) &
+        (pts[:, 0] < w - margin) &
+        (pts[:, 1] > top_margin) &
+        (pts[:, 1] <= h)
     )
-    
+
     if np.sum(valid_mask) < 10:
         pts_final = pts
     else:
         pts_final = pts[valid_mask]
-    
-    #pts_final = _remover_faixa_horizontal_vazada(pts_final, h, w)#
+
+    print("Y máximo depois:", np.max(pts_final[:,1]))
+    pts_final = _remover_faixa_horizontal_vazada(pts_final, h, w)
     return pts_final if len(pts_final) > 0 else None
 
 def _validar_contorno(c, h: int, w: int) -> bool:
@@ -485,7 +500,7 @@ def avaliar_qualidade_contorno(pts: np.ndarray, img_shape) -> dict:
 
 
 def _remover_faixa_horizontal_vazada(pts: np.ndarray, h: int, w: int) -> np.ndarray:
-    """Remove apenas vazamento horizontal no fundo, sem cortar o corpo da gota."""
+    """Remove a ligação horizontal inferior, preservando as bordas laterais da gota."""
     if pts is None or len(pts) < 20:
         return pts
 
@@ -493,11 +508,6 @@ def _remover_faixa_horizontal_vazada(pts: np.ndarray, h: int, w: int) -> np.ndar
     banda = max(2.0, 0.01 * h)
     fundo = pts[pts[:, 1] >= (y_max - banda)]
     if len(fundo) < 12:
-        return pts
-
-    x_span = float(np.max(fundo[:, 0]) - np.min(fundo[:, 0]))
-    vazou_superficie = x_span > 0.78 * w
-    if not vazou_superficie:
         return pts
 
     # Remove só a faixa horizontal central; preserva regiões laterais de contato.
@@ -508,7 +518,7 @@ def _remover_faixa_horizontal_vazada(pts: np.ndarray, h: int, w: int) -> np.ndar
     x_left_keep = x_q10 + margem_lateral
     x_right_keep = x_q90 - margem_lateral
 
-    faixa_inferior = pts[:, 1] >= y_cut
+    faixa_inferior = (pts[:, 1] >= y_cut) & (pts[:, 1] < y_max)
     miolo_horizontal = (pts[:, 0] >= x_left_keep) & (pts[:, 0] <= x_right_keep)
     remover = faixa_inferior & miolo_horizontal
     keep = ~remover
@@ -541,6 +551,7 @@ def encontrar_contorno_gota(imagem_binaria):
     processed[:, max(0, w - side_margin):] = 0
 
     # Passo 2: Encontrar contornos
+
     conts, _ = cv2.findContours(processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     # Fallback se a binarização falhou mas há bordas visíveis
@@ -642,7 +653,9 @@ def projetar_ponto_no_contorno(ponto, gota_pts, baseline_y,
     idx = int(np.argmin(dists))
     ponto_final = [float(candidatos[idx, 0]), float(candidatos[idx, 1])]
 
-    if abs(ponto_final[0] - px) <= tolerancia_px and abs(ponto_final[1] - py) <= tolerancia_px:
+    # Mantém o ponto apenas quando ele já coincide com o contorno.
+    # Qualquer desvio vira correção explícita para evitar contato "fora".
+    if abs(ponto_final[0] - px) < 1e-6 and abs(ponto_final[1] - py) < 1e-6:
         return ponto_final, False
 
     return ponto_final, True

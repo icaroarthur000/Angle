@@ -68,27 +68,33 @@ def ajustar_circulo_algebrico(pontos: np.ndarray) -> Tuple[float, float, float]:
     
     return float(xc), float(yc), float(R)
 
+
 def _selecionar_pontos_tangente(local_pts: np.ndarray, baseline_y: float, p_contato: Optional[Union[list, tuple]] = None) -> np.ndarray:
     """Seleciona pontos próximos ao contato para ajuste da tangente."""
     if local_pts is None or len(local_pts) < 3:
         return np.empty((0, 2), dtype=float)
 
-    # Mantém apenas pontos imediatamente acima da baseline,
+    # Mantém apenas pontos imediatamente acima da baseline (com margem de 5px abaixo para sub-pixel),
     # onde a curvatura local descreve a tangente.
     distance_from_baseline = baseline_y - local_pts[:, 1]
-    mask = (distance_from_baseline > 1.0) & (distance_from_baseline <= 30.0)
+    mask = (distance_from_baseline >= -5.0) & (distance_from_baseline <= 45.0)
     pts = local_pts[mask]
 
     if len(pts) == 0:
         return np.empty((0, 2), dtype=float)
 
     if p_contato is not None and len(p_contato) >= 2:
-        contato_x = float(p_contato[0])
-        tie_break = np.abs(pts[:, 0] - contato_x)
-        sorted_idx = np.lexsort((tie_break, distance_from_baseline[mask]))
+        contato = np.asarray(p_contato[:2], dtype=float)
+        tie_break = np.hypot(pts[:, 0] - contato[0], pts[:, 1] - contato[1])
+        sorted_idx = np.argsort(tie_break)
     else:
         sorted_idx = np.argsort(distance_from_baseline[mask])
-    pts = pts[sorted_idx[:min(12, len(pts))]]
+    max_points = min(48, max(16, len(pts) // 4))
+    pts = pts[sorted_idx[:max_points]]
+    if p_contato is not None and len(p_contato) >= 2:
+        contato = np.asarray(p_contato[:2], dtype=float)
+        if len(pts) == 0 or np.min(np.hypot(pts[:, 0] - contato[0], pts[:, 1] - contato[1])) > 1e-6:
+            pts = np.vstack([contato, pts])
     return pts
 
 
@@ -98,6 +104,17 @@ def _calcular_slope_tangente_polynomial(local_pts: np.ndarray, baseline_y: float
         return None
 
     pts = _selecionar_pontos_tangente(local_pts, baseline_y, p_contato)
+    
+    print(f"\n[DIAGNOSTICO TANGENTE {lado.upper()}]")
+    print(f"  Pontos recebidos de _selecionar_pontos_lado: {len(local_pts)}")
+    print(f"  Pontos selecionados para a tangente (filtrados): {len(pts)}")
+    if len(pts) > 0:
+        print(f"  Primeiros 5 pontos: {pts[:5].tolist()}")
+        print(f"  Últimos 5 pontos: {pts[-5:].tolist()}")
+    else:
+        print("  Nenhum ponto selecionado.")
+    print(f"  Ponto de contato recebido: {p_contato}")
+
     if len(pts) < 4:
         pts = local_pts
 
@@ -109,7 +126,8 @@ def _calcular_slope_tangente_polynomial(local_pts: np.ndarray, baseline_y: float
     # Ajuste quadrático x = a*y^2 + b*y + c para estimar dx/dy no ponto de contato.
     coeffs = np.polyfit(ys, xs, 2)
     a, b = coeffs[0], coeffs[1]
-    dx_dy = 2.0 * a * baseline_y + b
+    y_derivada = float(p_contato[1]) if p_contato is not None and len(p_contato) >= 2 else float(baseline_y)
+    dx_dy = 2.0 * a * y_derivada + b
 
     if not np.isfinite(dx_dy):
         return None
@@ -166,6 +184,14 @@ def _normalizar_vetor_tangente(m_tangente: float) -> tuple[float, float]:
     return vx / norm, vy / norm
 
 
+def _angulo_interno_pelo_centro(theta_deg: float, yc: float, y_contato: float) -> float:
+    """Converte o angulo agudo da tangente no angulo interno do liquido."""
+    theta_deg = float(np.clip(theta_deg, 0.0, 180.0))
+    if yc < y_contato - 1.0:
+        theta_deg = 180.0 - theta_deg
+    return float(np.clip(theta_deg, 0.0, 180.0))
+
+
 def calcular_vetor_tangente(
     gota_pts: np.ndarray,
     p_esq: Union[list, tuple],
@@ -198,7 +224,7 @@ def calcular_vetor_tangente(
 
     a, b, c = coeffs
     x_expr = f"x(y)={a:.6e}*y^2 + {b:.6e}*y + {c:.6e}"
-    dx_dy = 2.0 * a * baseline_y + b
+    dx_dy = 2.0 * a * float(contato[1]) + b
 
     if np.isfinite(m_tangente):
         dy_dx = f"{m_tangente:.6f}"
@@ -302,9 +328,6 @@ def calcular_angulo_circular(
     # --- CALIBRAÇÃO ADAPTATIVA DE BASELINE ---
     altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1])) if len(gota_pts) > 0 else 100.0
     offset_calibracao = float(np.clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota, ANGLE_BASELINE_OFFSET_MIN, ANGLE_BASELINE_OFFSET_MAX))
-    # Em coordenadas de imagem, valores Y maiores estão abaixo.
-    # Para analisar a borda da gota acima da linha de contato, deslocamos a
-    # janela de seleção um pouco para baixo (Y maior) em relação à baseline.
     baseline_ajustada = baseline_y + offset_calibracao
 
     # Janela de análise com base na linha ajustada
@@ -374,23 +397,32 @@ def calcular_angulo_circular(
             denominador = baseline_y - yc
             if denominador == 0:
                 theta_deg = 90.0
+                dx_dy = 0.0
             else:
                 m_tangente = -numerador / denominador
                 theta_deg = math.degrees(math.atan(abs(m_tangente)))
+                dx_dy = -denominador / numerador if numerador != 0 else float("inf")
         else:
             m_tangente, coeffs, pts = slope_result
             theta_deg = math.degrees(math.atan(abs(m_tangente)))
+            a, b = coeffs[0], coeffs[1]
+            y_derivada = float(contato[1])
+            dx_dy = 2.0 * a * y_derivada + b
             logger.debug(
-                "[TANGENTE POLYFIT] lado=%s baseline=%.2f slope=%.4f",
-                lado, baseline_y, m_tangente
+                "[TANGENTE POLYFIT] lado=%s baseline=%.2f slope=%.4f dx_dy=%.4f",
+                lado, baseline_y, m_tangente, dx_dy
             )
 
-        # 4. Escolha do ângulo interno/external: o ângulo interno deve ser
-        # medido na face do líquido, ou seja, no lado do tangente onde
-        # está o centro do círculo estimado.
-        y_line_at_xc = baseline_y + m_tangente * (xc - x_contato)
-        if yc > y_line_at_xc:
-            theta_deg = 180.0 - theta_deg
+        # 4. Escolha do ângulo interno/externo baseada no sinal da derivada dx/dy:
+        if np.isfinite(dx_dy):
+            if lado == "esq":
+                # Lado esquerdo: se dx/dy > 0, o contorno sobe se inclinando para a esquerda (obtuso)
+                if dx_dy > 0:
+                    theta_deg = 180.0 - theta_deg
+            else:
+                # Lado direito: se dx/dy < 0, o contorno sobe se inclinando para a direita (obtuso)
+                if dx_dy < 0:
+                    theta_deg = 180.0 - theta_deg
 
         # --- DEBUG ---
         logger.debug(

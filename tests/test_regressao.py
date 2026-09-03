@@ -166,3 +166,33 @@ def test_fallback_polinomial_com_pontos_colineares():
     if angulo is not None:
         assert isinstance(angulo, float)
         assert 0.0 <= angulo <= 180.0, f"Fallback retornou ângulo fora do domínio: {angulo}°"
+
+
+def test_validacao_contato_aceita_extrapolacao_pouco_fora_da_faixa_observada():
+    contour = np.array([
+        [20.0, 100.0],
+        [25.0, 100.0],
+        [30.0, 99.0],
+        [40.0, 98.0],
+        [50.0, 97.0],
+        [60.0, 96.0],
+        [70.0, 95.0],
+        [80.0, 94.0],
+        [90.0, 93.0],
+        [100.0, 92.0],
+        [110.0, 92.0],
+        [120.0, 92.0],
+        [130.0, 93.0],
+        [140.0, 94.0],
+        [150.0, 95.0],
+        [160.0, 96.0],
+        [170.0, 97.0],
+        [180.0, 98.0],
+        [190.0, 100.0],
+        [195.0, 100.0],
+    ], dtype=float)
+
+    validation = linha_base._validar_candidato_contato_base(contour, [5.0, 100.0], 100.0, "esq")
+
+    assert validation is not None
+    assert validation["is_valid"] is True

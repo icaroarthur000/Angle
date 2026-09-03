@@ -234,6 +234,63 @@ def draw_vector(canvas, origin, vector, color, label):
     cv2.putText(canvas, label, (end[0] + 5, end[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
 
+def analyze_side_production(pts, p_esq, p_dir, baseline_y, lado):
+    """Executa a mesma cadeia usada por SelectionWindow.calculate()."""
+    contact = p_esq if lado == "esq" else p_dir
+    vector = angulo_contato.calcular_vetor_tangente(pts, p_esq, p_dir, baseline_y, lado)
+    angle = angulo_contato.calcular_angulo_circular(pts, p_esq, p_dir, baseline_y, lado)
+    debug = angulo_contato.get_audit_context().get("last_tangent_selection", {})
+    selected_points = np.asarray(debug.get("selected_points", np.empty((0, 2))), dtype=float)
+    selected_indices = [int(index) for index in debug.get("selected_indices", [])]
+    records = [
+        {
+            "ordem": order,
+            "index": index,
+            "x": float(point[0]),
+            "y": float(point[1]),
+            "dist_baseline": float(baseline_y - point[1]),
+            "dist_baseline_ajustada": float(baseline_y - point[1]),
+        }
+        for order, (index, point) in enumerate(zip(selected_indices, selected_points))
+    ]
+    altura_gota = float(np.max(pts[:, 1]) - np.min(pts[:, 1]))
+    offset = float(np.clip(
+        angulo_contato.ANGLE_BASELINE_OFFSET_FACTOR * altura_gota,
+        angulo_contato.ANGLE_BASELINE_OFFSET_MIN,
+        angulo_contato.ANGLE_BASELINE_OFFSET_MAX,
+    ))
+    dy_dx = None
+    dx_dy = None
+    if vector is not None:
+        vx, vy = vector
+        dy_dx = float(vy / vx) if abs(vx) > 1e-12 else float("inf")
+        dx_dy = float(vx / vy) if abs(vy) > 1e-12 else 0.0
+    result = AuditResult(
+        status="producao",
+        selected_points=records,
+        selected_indices=selected_indices,
+        coeffs=None,
+        dx_dy=dx_dy,
+        dy_dx=dy_dx,
+        rmse=None,
+        residuals=None,
+        notes=f"metodo=tangente_polynomial; angulo_producao={angle}",
+    )
+    info = {
+        "altura_gota": altura_gota,
+        "offset": offset,
+        "baseline_ajustada": baseline_y + offset,
+        "window_height": len(selected_points),
+        "center_x_approx": float((p_esq[0] + p_dir[0]) / 2.0),
+        "selected_points": selected_points,
+        "selected_indices": selected_indices,
+        "discarded_indices": [index for index in range(len(pts)) if index not in selected_indices],
+    }
+    result.angle_deg = angle
+    result.method = "tangente_polynomial"
+    return result, info
+
+
 def render_image(base_image, pts, baseline_y, p_esq, p_dir, left_result, right_result, left_info, right_info):
     canvas = base_image.copy()
     if len(pts) >= 3:
@@ -379,8 +436,8 @@ def process_image(image_name):
     p_esq = data["p_esq"]
     p_dir = data["p_dir"]
 
-    left_result, left_info = analyze_side(pts, p_esq, p_dir, baseline_y, "esq")
-    right_result, right_info = analyze_side(pts, p_esq, p_dir, baseline_y, "dir")
+    left_result, left_info = analyze_side_production(pts, p_esq, p_dir, baseline_y, "esq")
+    right_result, right_info = analyze_side_production(pts, p_esq, p_dir, baseline_y, "dir")
 
     vis = render_image(data["image"], pts, baseline_y, p_esq, p_dir, left_result, right_result, left_info, right_info)
     cv2.imwrite(str(VIS_DIR / f"{image_name.replace('.png', '')}_audit.png"), vis)
@@ -595,16 +652,21 @@ def run_full_audit():
     for image in IMAGES:
         items.append(process_image(image))
 
-    sensitivity_map = {}
-    factors = [0.55, 0.45, 0.35, 0.25, 0.15]
-    for item in items:
-        pts = load_pipeline(item["image"])["pts"]
-        p_esq = item["p_esq"]
-        p_dir = item["p_dir"]
-        baseline_y = item["baseline_y"]
-        for lado in ("esq", "dir"):
-            rows = analyze_sensitivity(pts, p_esq, p_dir, baseline_y, lado, factors)
-            sensitivity_map[(item["image"], lado)] = rows
+    sensitivity_map = {
+        (item["image"], lado): [SensitivityRow(
+            factor=1.0,
+            selected_count=len((item["left"] if lado == "esq" else item["right"]).selected_points),
+            polyfit_count=None,
+            coeffs=None,
+            dx_dy=(item["left"] if lado == "esq" else item["right"]).dx_dy,
+            dy_dx=(item["left"] if lado == "esq" else item["right"]).dy_dx,
+            angle_deg=getattr((item["left"] if lado == "esq" else item["right"]), "angle_deg", None),
+            status="producao",
+            window_height=len((item["left"] if lado == "esq" else item["right"]).selected_points),
+        )]
+        for item in items
+        for lado in ("esq", "dir")
+    }
 
     build_final_report(items, sensitivity_map)
     return items, sensitivity_map

@@ -124,6 +124,118 @@ def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30, deb
 # BLOCO 2: EXTRAPOLAÇÃO POLINOMIAL (Método Científico)
 # =================================================================
 
+def _validar_candidato_contato_base(contour_pts: np.ndarray, candidate, baseline_y: float, lado: str) -> Optional[Dict]:
+    """Valida se um candidato de contato é fisicamente plausível para a região inferior da gota."""
+    if contour_pts is None or len(contour_pts) < 4:
+        return None
+    if candidate is None or len(candidate) < 2:
+        return None
+    if lado not in {"esq", "dir"}:
+        return None
+
+    contour_arr = np.asarray(contour_pts, dtype=float)
+    candidate_pt = np.asarray(candidate[:2], dtype=float)
+    if not np.isfinite(candidate_pt).all():
+        return None
+
+    dist_to_contour = float(np.min(np.linalg.norm(contour_arr - candidate_pt, axis=1)))
+    vertical_to_baseline = float(abs(candidate_pt[1] - baseline_y))
+    height = float(np.ptp(contour_arr[:, 1])) if len(contour_arr) > 0 else 1.0
+    x_span = float(np.ptp(contour_arr[:, 0])) if len(contour_arr) > 1 else 1.0
+    max_vertical = max(6.0, 0.03 * height)
+    max_dist = max(18.0, 0.12 * max(1.0, x_span), 0.06 * height)
+
+    x_center = float(np.mean(contour_arr[:, 0]))
+    if lado == "esq" and candidate_pt[0] >= x_center:
+        return None
+    if lado == "dir" and candidate_pt[0] <= x_center:
+        return None
+
+    if vertical_to_baseline > max_vertical:
+        return None
+    if dist_to_contour > max_dist:
+        return None
+
+    lower_band = contour_arr[np.abs(contour_arr[:, 1] - baseline_y) <= max_vertical]
+    if len(lower_band) >= 2:
+        x_min = float(np.min(lower_band[:, 0]))
+        x_max = float(np.max(lower_band[:, 0]))
+        x_span = float(np.ptp(contour_arr[:, 0])) if len(contour_arr) > 1 else 1.0
+        side_margin = max(15.0, 0.08 * max(1.0, x_span))
+        if lado == "esq" and candidate_pt[0] < x_min - side_margin:
+            return None
+        if lado == "dir" and candidate_pt[0] > x_max + side_margin:
+            return None
+
+    return {
+        "is_valid": True,
+        "dist_to_contour": dist_to_contour,
+        "vertical_to_baseline": vertical_to_baseline,
+        "score": dist_to_contour + 0.5 * vertical_to_baseline,
+    }
+
+
+def fallback_geometric(gota_pts: np.ndarray, baseline_y: float, debug: bool = False) -> Tuple[Optional[List[float]], Optional[List[float]]]:
+    """Fallback geométrico simples para contatos quando a extrapolação polinomial falha.
+
+    Usa a faixa inferior do contorno, próxima à baseline, e escolhe os extremos laterais
+    que melhor se encaixam na geometria da gota.
+    """
+    if gota_pts is None or len(gota_pts) < 2:
+        return None, None
+
+    contour_arr = np.asarray(gota_pts, dtype=float)
+    if len(contour_arr) < 2:
+        return None, None
+
+    height = float(np.ptp(contour_arr[:, 1])) if len(contour_arr) > 0 else 1.0
+    max_vertical = max(6.0, 0.03 * max(height, 1.0))
+    lower_band = contour_arr[np.abs(contour_arr[:, 1] - baseline_y) <= max_vertical]
+    if len(lower_band) < 2:
+        lower_band = contour_arr
+
+    x_center = float(np.mean(contour_arr[:, 0]))
+
+    left_candidates = lower_band[lower_band[:, 0] <= x_center]
+    right_candidates = lower_band[lower_band[:, 0] >= x_center]
+
+    if len(left_candidates) < 1:
+        left_candidates = contour_arr[contour_arr[:, 0] <= x_center]
+    if len(right_candidates) < 1:
+        right_candidates = contour_arr[contour_arr[:, 0] >= x_center]
+
+    if len(left_candidates) < 1 or len(right_candidates) < 1:
+        return None, None
+
+    # Escolhe o ponto mais à esquerda/mais à direita na faixa inferior, mas próximo da baseline.
+    # Para gotas reais, o contato deve ser o ponto mais baixo e mais lateral do contorno,
+    # não um ponto isolado na borda da imagem ou um ponto de preenchimento espúrio.
+    left_idx = int(np.argmin(left_candidates[:, 0]))
+    right_idx = int(np.argmax(right_candidates[:, 0]))
+
+    p_esq = [float(left_candidates[left_idx, 0]), float(left_candidates[left_idx, 1])]
+    p_dir = [float(right_candidates[right_idx, 0]), float(right_candidates[right_idx, 1])]
+
+    # Se o ponto resultante estiver na borda da imagem ou muito longe do contorno da gota,
+    # substitui pela projeção mais próxima da linha da baseline dentro do lado correspondente.
+    margin = max(4.0, 0.02 * max(1.0, float(contour_arr.shape[1])))
+    if p_esq[0] <= margin or p_esq[0] >= contour_arr.shape[1] - margin:
+        side_pts = left_candidates[left_candidates[:, 1] >= baseline_y - max_vertical]
+        if len(side_pts) > 0:
+            best = side_pts[np.argmax(side_pts[:, 0])]
+            p_esq = [float(best[0]), float(best[1])]
+    if p_dir[0] <= margin or p_dir[0] >= contour_arr.shape[1] - margin:
+        side_pts = right_candidates[right_candidates[:, 1] >= baseline_y - max_vertical]
+        if len(side_pts) > 0:
+            best = side_pts[np.argmin(side_pts[:, 0])]
+            p_dir = [float(best[0]), float(best[1])]
+
+    if debug:
+        print(f"[FALLBACK GEOMÉTRICO] p_esq={p_esq} p_dir={p_dir}")
+
+    return p_esq, p_dir
+
+
 def find_contact_points_by_extrapolation(
     gota_pts: np.ndarray,
     baseline_y: float,
@@ -202,56 +314,39 @@ def find_contact_points_by_extrapolation(
     p_esq, coeffs_esq = extrapolate_side(left_pts, "ESQUERDA")
     p_dir, coeffs_dir = extrapolate_side(right_pts, "DIREITA")
     
-    # Se ambos falharam, usar fallback
-    if p_esq is None and p_dir is None:
-        if debug:
-            print("[EXTRAPOLAÇÃO] Ambos os lados falharam, usando fallback geométrico")
-        return fallback_geometric(gota_pts, baseline_y, debug=debug)
-    
-    # Se apenas um lado falhou, espelhar o outro
+    fallback_esq, fallback_dir = fallback_geometric(gota_pts, baseline_y, debug=debug)
+
+    def _selecionar_candidato(candidate, fallback, side_name):
+        validated_extrapolation = _validar_candidato_contato_base(gota_pts, candidate, baseline_y, lado=side_name)
+        if validated_extrapolation is not None:
+            return candidate, "extrapolation"
+
+        if fallback is not None:
+            validated_fallback = _validar_candidato_contato_base(gota_pts, fallback, baseline_y, lado=side_name)
+            if validated_fallback is not None:
+                return fallback, "fallback"
+
+        return None, "unreliable"
+
     if p_esq is None and p_dir is not None:
         dist = abs(p_dir[0] - x_center)
         p_esq = [x_center - dist, baseline_y]
-        coeffs_esq = None
         if debug:
             print(f"[ESQUERDA] Espelhado a partir da direita: ({p_esq[0]:.2f}, {p_esq[1]:.2f})")
-    
+
     if p_dir is None and p_esq is not None:
         dist = abs(p_esq[0] - x_center)
         p_dir = [x_center + dist, baseline_y]
-        coeffs_dir = None
-    
-    y_max = float(np.max(gota_pts[:, 1]))
-    y_min = float(np.min(gota_pts[:, 1]))
-    height = y_max - y_min
 
-    # Tolerância adaptativa: busca pontos nos 15% inferiores do contorno
-    adaptive_tol = max(5.0, 0.15 * height)
-    near_baseline = gota_pts[gota_pts[:, 1] >= (y_max - adaptive_tol)]
-    
-    if len(near_baseline) >= 2:
-        x_center = float(np.mean(gota_pts[:, 0]))
-        # Ponto esquerdo: extremo esquerdo na faixa inferior
-        left_pts = near_baseline[near_baseline[:, 0] <= x_center]
-        right_pts = near_baseline[near_baseline[:, 0] > x_center]
-        x_esq = float(np.min(left_pts[:, 0])) if len(left_pts) > 0 else float(np.min(near_baseline[:, 0]))
-        x_dir = float(np.max(right_pts[:, 0])) if len(right_pts) > 0 else float(np.max(near_baseline[:, 0]))
-        return [x_esq, baseline_y], [x_dir, baseline_y]
-    
-    # Fallback final: extremos horizontais do terço inferior
-    y_terco = y_max - 0.33 * height
-    terco_inf = gota_pts[gota_pts[:, 1] >= y_terco]
-    if len(terco_inf) >= 2:
-        x_center = float(np.mean(gota_pts[:, 0]))
-        left_terco = terco_inf[terco_inf[:, 0] <= x_center]
-        right_terco = terco_inf[terco_inf[:, 0] > x_center]
-        x_min = float(np.min(left_terco[:, 0])) if len(left_terco) > 0 else float(np.min(terco_inf[:, 0]))
-        x_max = float(np.max(right_terco[:, 0])) if len(right_terco) > 0 else float(np.max(terco_inf[:, 0]))
-        return [x_min, baseline_y], [x_max, baseline_y]
+    p_esq, _ = _selecionar_candidato(p_esq, fallback_esq, "esq")
+    p_dir, _ = _selecionar_candidato(p_dir, fallback_dir, "dir")
 
-    x_min = float(np.min(gota_pts[:, 0]))
-    x_max = float(np.max(gota_pts[:, 0]))
-    return [x_min, baseline_y], [x_max, baseline_y]
+    if p_esq is None or p_dir is None:
+        if debug:
+            print("[EXTRAPOLAÇÃO] Nenhum candidato de contato passou na validação geométrica")
+        return None, None
+
+    return p_esq, p_dir
 
 
 # =================================================================
@@ -313,7 +408,7 @@ def detectar_baseline_hibrida(gota_pts: np.ndarray, debug: bool = False) -> Dict
         'p_esq': _norm_pt(p_esq),
         'p_dir': _norm_pt(p_dir),
         'method': 'floor_seeker_hybrid',
-        'contact_method': 'polynomial_extrapolation',
+        'contact_method': 'validated_contact' if p_esq is not None and p_dir is not None else 'unreliable',
     }
 
 

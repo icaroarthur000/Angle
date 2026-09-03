@@ -1,4 +1,4 @@
-import cv2
+import cv2  
 import numpy as np  
 import math
 import customtkinter as ctk
@@ -945,32 +945,16 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.contact_method = res.get('contact_method')
 
 
-        # Garantia de segurança: se baseline/contatos vierem inválidos, usa a base do contorno
         try:
             baseline_ok = self.baseline_y is not None and np.isfinite(self.baseline_y)
         except Exception:
             baseline_ok = False
 
-        # Primeiro fallback: função legado que retorna extremos do terço inferior
-        if not baseline_ok or self.p_esq is None or self.p_dir is None:
-            base_y, base_p_esq, base_p_dir = linha_base.encontrar_pontos_contato_base(self.gota_pts)
-            if not baseline_ok:
-                self.baseline_y = base_y
-            if self.p_esq is None and base_p_esq is not None:
-                self.p_esq = [float(base_p_esq[0]), float(base_p_esq[1])]
-            if self.p_dir is None and base_p_dir is not None:
-                self.p_dir = [float(base_p_dir[0]), float(base_p_dir[1])]
+        if not baseline_ok:
+            self.baseline_y = float(np.max(self.gota_pts[:, 1]))
 
-        # Último recurso: se ainda faltar algum ponto, use fallback geométrico simples
         if self.p_esq is None or self.p_dir is None:
-            try:
-                p_esq_fb, p_dir_fb = linha_base.encontrar_pontos_contato(self.gota_pts, self.baseline_y)
-                if self.p_esq is None and p_esq_fb is not None:
-                    self.p_esq = [float(p_esq_fb[0]), float(p_esq_fb[1])]
-                if self.p_dir is None and p_dir_fb is not None:
-                    self.p_dir = [float(p_dir_fb[0]), float(p_dir_fb[1])]
-            except Exception:
-                pass
+            self.contact_method = 'contact_not_reliable'
 
         # Assegura tipos corretos
         if self.p_esq is not None:
@@ -1037,11 +1021,11 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.calculate()
 
     def update_contact_points(self):
-        # usa pontos de contato já computados ou refallback
+        # Mantém os pontos de contato apenas quando o fluxo atual os produziu com confiança.
         if self.p_esq is None or self.p_dir is None:
-            self.p_esq, self.p_dir = linha_base.encontrar_pontos_contato(
-                self.gota_pts, self.baseline_y
-            )
+            self.contact_method = 'contact_not_reliable'
+            self.calculate()
+            return
 
         # Recompute baseline line_params to keep rendering consistent
         if self.p_esq is not None and self.p_dir is not None:

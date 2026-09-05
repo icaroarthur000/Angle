@@ -120,6 +120,79 @@ def detect_baseline_tls(gota_pts: np.ndarray, bottom_fraction: float = 0.30, deb
     return float(y_max), (1.0, 0.0, x0, y_max)
 
 
+def detectar_baseline_superficie(imagem, gota_pts: Optional[np.ndarray] = None,
+                                 fallback_y: Optional[float] = None,
+                                 debug: bool = False) -> Tuple[Optional[float], Optional[Tuple], Dict]:
+    """Detecta a superficie horizontal diretamente na imagem original.
+
+    O contorno de uma mascara Binary pode conter um fechamento artificial abaixo
+    da gota. Colunas fora da silhueta permitem localizar a primeira faixa escura
+    continua do substrato sem confundir esse fechamento com a superficie real.
+    """
+    if imagem is None:
+        return fallback_y, None, {"valida": False, "motivo": "imagem_ausente"}
+
+    gray = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY) if np.ndim(imagem) == 3 else np.asarray(imagem)
+    if gray.ndim != 2 or gray.size == 0:
+        return fallback_y, None, {"valida": False, "motivo": "imagem_invalida"}
+
+    height, width = gray.shape[:2]
+    _, threshold = cv2.threshold(gray.astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    dark = threshold == 0
+
+    if gota_pts is not None and len(gota_pts) > 0:
+        x_min = int(np.floor(np.min(gota_pts[:, 0])))
+        x_max = int(np.ceil(np.max(gota_pts[:, 0])))
+    else:
+        x_min, x_max = width // 4, (3 * width) // 4
+
+    margin = max(3, int(round(0.01 * width)))
+    columns = list(range(max(0, x_min - margin - 5), max(0, x_min - margin)))
+    columns += list(range(min(width, x_max + margin + 1), min(width, x_max + margin + 6)))
+    columns = [x for x in columns if 0 <= x < width]
+    start_y = height // 3
+    min_run = max(5, int(round(0.03 * height)))
+    transitions = []
+
+    for x in columns:
+        dark_column = dark[start_y:, x]
+        for offset, is_dark in enumerate(dark_column):
+            if not is_dark:
+                continue
+            y = start_y + offset
+            run = dark[y:min(height, y + min_run), x]
+            if len(run) == min_run and np.count_nonzero(run) == min_run:
+                transitions.append(y)
+                break
+
+    if len(transitions) < 2:
+        return fallback_y, None, {
+            "valida": False,
+            "motivo": "transicao_insuficiente",
+            "transicoes": transitions,
+        }
+
+    surface_y = float(np.median(transitions))
+    spread = float(np.ptp(transitions))
+    if spread > max(3.0, 0.01 * height):
+        return fallback_y, None, {
+            "valida": False,
+            "motivo": "transicao_ambigua",
+            "transicoes": transitions,
+            "dispersao": spread,
+        }
+
+    params = (1.0, 0.0, float(width / 2.0), surface_y)
+    if debug:
+        print(f"[BASELINE IMAGEM] y={surface_y:.2f} transicoes={transitions}")
+    return surface_y, params, {
+        "valida": True,
+        "motivo": "transicao_substrato",
+        "transicoes": transitions,
+        "dispersao": spread,
+    }
+
+
 # =================================================================
 # BLOCO 2: EXTRAPOLAÇÃO POLINOMIAL (Método Científico)
 # =================================================================

@@ -198,6 +198,7 @@ def _selecionar_pontos_tangente(
     p_contato: Optional[Union[list, tuple]] = None,
     contour_pts: Optional[np.ndarray] = None,
     lado: str = "esq",
+    profile_open: bool = False,
 ) -> np.ndarray:
     """Seleciona uma janela contínua e local do contorno ao redor do ponto de contato para o polyfit."""
     if local_pts is None or len(local_pts) < 3:
@@ -207,6 +208,27 @@ def _selecionar_pontos_tangente(
     parent = np.asarray(contour_pts if contour_pts is not None else local_pts, dtype=float)
     if len(parent) == 0 or len(points) == 0:
         return np.empty((0, 2), dtype=float)
+
+    # Um perfil extraído já está ordenado e aberto; não o reinterprete como
+    # contorno cíclico nem procure um ramo alternativo no fechamento.
+    if profile_open:
+        if p_contato is None or len(p_contato) < 2:
+            selected_points = points[: min(7, len(points))]
+        else:
+            contact_local_idx = int(np.argmin(np.linalg.norm(points - np.asarray(p_contato[:2], dtype=float), axis=1)))
+            window_size = min(7, len(points))
+            start_idx = max(0, min(contact_local_idx - window_size // 2, len(points) - window_size))
+            selected_points = points[start_idx:start_idx + window_size]
+        if len(selected_points) >= 4:
+            set_audit_context(last_tangent_selection={
+                "contact_idx": contact_local_idx if p_contato is not None and len(p_contato) >= 2 else 0,
+                "selected_indices": list(range(start_idx, start_idx + len(selected_points))) if p_contato is not None and len(p_contato) >= 2 else list(range(len(selected_points))),
+                "selected_count": int(len(selected_points)),
+                "contiguous": True,
+                "profile_open": True,
+                "selected_points": selected_points.astype(float),
+            })
+        return selected_points
 
     if p_contato is None or len(p_contato) < 2:
         return points[: min(16, len(points))]
@@ -290,12 +312,16 @@ def _calcular_slope_tangente_polynomial(
     lado: str,
     p_contato: Optional[Union[list, tuple]] = None,
     contour_pts: Optional[np.ndarray] = None,
+    profile_open: bool = False,
 ) -> Optional[Tuple[float, np.ndarray, np.ndarray]]:
     """Calcula a inclinaï¿½ï¿½o da tangente usando ajuste x = f(y) na regiï¿½o de contato."""
     if local_pts is None or len(local_pts) < 3:
         return None
 
-    pts = _selecionar_pontos_tangente(local_pts, baseline_y, p_contato, contour_pts, lado=lado)
+    pts = _selecionar_pontos_tangente(
+        local_pts, baseline_y, p_contato, contour_pts,
+        lado=lado, profile_open=profile_open
+    )
     if len(pts) < 4:
         pts = np.asarray(local_pts, dtype=float)
 
@@ -434,7 +460,12 @@ def calcular_vetor_tangente(
         return None
     if lado not in ("esq", "dir"):
         return None
-    slope_result = _calcular_slope_tangente_polynomial(gota_pts, baseline_y, lado, p_contato=(p_esq if lado == "esq" else p_dir), contour_pts=gota_pts)
+    slope_result = _calcular_slope_tangente_polynomial(
+        gota_pts, baseline_y, lado,
+        p_contato=(p_esq if lado == "esq" else p_dir),
+        contour_pts=gota_pts,
+        profile_open=True,
+    )
     if slope_result is None:
         return None
     m_tangente, _, _ = slope_result
@@ -448,31 +479,72 @@ def calcular_angulo_circular(
     baseline_y: float,
     lado: str,
 ) -> Optional[float]:
-    if gota_pts is None or len(gota_pts) < 3:
+    if gota_pts is None or len(gota_pts) < 5:
         return None
     if p_esq is None or p_dir is None:
         return None
     if lado not in ("esq", "dir"):
         return None
 
+    offset_calibracao = 3.0
+    baseline_ajustada = float(baseline_y) + offset_calibracao
     pts = np.asarray(gota_pts, dtype=float)
-    try:
-        xc, yc, R = ajustar_circulo_algebrico(pts)
-    except Exception:
-        return _calcular_angulo_polynomial_fallback(pts, baseline_y, lado)
-
-    if not np.isfinite(R) or R <= 0:
-        return _calcular_angulo_polynomial_fallback(pts, baseline_y, lado)
-
-    contato = np.asarray(p_esq if lado == "esq" else p_dir, dtype=float)
-    radius_vec = np.array([contato[0] - xc, contato[1] - yc], dtype=float)
-    if np.linalg.norm(radius_vec) < 1e-12:
-        tangent_vec = np.array([0.0, 1.0], dtype=float)
+    mask = (pts[:, 1] < baseline_ajustada - 3.0) & (pts[:, 1] > baseline_ajustada - 150.0)
+    local_pts = pts[mask]
+    center_x = (float(p_esq[0]) + float(p_dir[0])) / 2.0
+    if lado == "esq":
+        local_pts = local_pts[local_pts[:, 0] < center_x]
     else:
-        tangent_vec = np.array([-radius_vec[1], radius_vec[0]], dtype=float)
-        tangent_vec = tangent_vec / float(np.linalg.norm(tangent_vec))
+        local_pts = local_pts[local_pts[:, 0] > center_x]
 
-    return _calcular_angulo_interno_por_vetor_tangente(tangent_vec, lado)
+    if len(local_pts) < 3:
+        return None
+
+    mean_xy = np.mean(local_pts, axis=0)
+    local_pts_centered = local_pts.astype(np.float64) - mean_xy
+    try:
+        xc0, yc0, R0 = ajustar_circulo_algebrico(local_pts_centered)
+    except Exception:
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+
+    dists = np.hypot(local_pts_centered[:, 0] - xc0, local_pts_centered[:, 1] - yc0)
+    residuals = np.abs(dists - R0)
+    sigma = np.std(residuals)
+    if sigma > 0:
+        local_pts_filtered = local_pts_centered[residuals <= 2.0 * sigma]
+    else:
+        local_pts_filtered = local_pts_centered
+
+    if len(local_pts_filtered) < 3:
+        return None
+
+    try:
+        xc, yc, R = ajustar_circulo_algebrico(local_pts_filtered)
+    except Exception:
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+
+    yc += mean_xy[1]
+    xc += mean_xy[0]
+    if R is None or R <= 0:
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+
+    dy = baseline_ajustada - yc
+    if abs(dy) >= R:
+        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+
+    dx = math.sqrt(max(0.0, R ** 2 - dy ** 2))
+    x_contato = xc - dx if lado == "esq" else xc + dx
+    denominador = baseline_ajustada - yc
+    if abs(denominador) < 1e-12:
+        theta_deg = 90.0
+    else:
+        m_tangente = -(x_contato - xc) / denominador
+        theta_deg = math.degrees(math.atan(abs(m_tangente)))
+
+    if yc > baseline_ajustada:
+        theta_deg = 180.0 - theta_deg
+
+    return float(np.clip(theta_deg, 0.0, 180.0))
 
 
 def calcular_qualidade_dinamica(

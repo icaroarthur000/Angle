@@ -608,6 +608,46 @@ def encontrar_contorno_gota(imagem_binaria):
     return pts_final if len(pts_final) > 0 else pts
 
 
+def avaliar_transicao_contato(ponto, gota_pts, baseline_y, indice=None):
+    """Avalia se um ponto pertence à transição gota-substrato, não ao piso horizontal."""
+    if gota_pts is None or len(gota_pts) < 3 or ponto is None:
+        return {"valida": False, "qualidade": 0.0, "motivo": "dados_ausentes"}
+
+    pontos = np.asarray(gota_pts, dtype=float)
+    alvo = np.asarray(ponto[:2], dtype=float)
+    if indice is None:
+        indice = int(np.argmin(np.linalg.norm(pontos - alvo, axis=1)))
+
+    anterior = pontos[(indice - 1) % len(pontos)]
+    seguinte = pontos[(indice + 1) % len(pontos)]
+    raio_transicao = min(5, max(1, len(pontos) // 20))
+    vizinhanca = [
+        pontos[(indice - deslocamento) % len(pontos)]
+        for deslocamento in range(1, raio_transicao + 1)
+    ] + [
+        pontos[(indice + deslocamento) % len(pontos)]
+        for deslocamento in range(1, raio_transicao + 1)
+    ]
+    horizontais = int(abs(anterior[1] - alvo[1]) <= 1.0) + int(abs(seguinte[1] - alvo[1]) <= 1.0)
+    ascendente = any(abs(float(alvo[1] - vizinho[1])) > 1.0 for vizinho in vizinhanca)
+    distancia_baseline = abs(float(alvo[1]) - float(baseline_y))
+    qualidade = 1.0
+    qualidade -= 0.35 * horizontais
+    qualidade += 0.15 if ascendente else -0.15
+    qualidade -= min(0.5, distancia_baseline / 20.0)
+    qualidade = float(np.clip(qualidade, 0.0, 1.0))
+    transicao_valida = ascendente and distancia_baseline <= 12.0
+    return {
+        "valida": bool(transicao_valida),
+        "qualidade": qualidade,
+        "motivo": "ok" if transicao_valida else "fechamento_horizontal",
+        "indice": int(indice),
+        "vizinhos_horizontais": horizontais,
+        "ascendente": bool(ascendente),
+        "distancia_baseline": float(distancia_baseline),
+    }
+
+
 def projetar_ponto_no_contorno(ponto, gota_pts, baseline_y,
                                tolerancia_px=2.0, faixa_baseline_px=30.0):
     """Valida se ponto está dentro da tolerância do contorno.
@@ -622,27 +662,123 @@ def projetar_ponto_no_contorno(ponto, gota_pts, baseline_y,
     mask = gota_pts[:, 1] >= (baseline_y - faixa_baseline_px)
     candidatos_faixa = gota_pts[mask] if np.any(mask) else gota_pts
     candidatos = candidatos_faixa if len(candidatos_faixa) >= 3 else gota_pts
+    indices_candidatos = np.flatnonzero(mask) if np.any(mask) and len(candidatos_faixa) >= 3 else np.arange(len(gota_pts))
     centro_x = float(np.mean(gota_pts[:, 0]))
 
     # Mantém o ponto no mesmo lado e força o encaixe na transicao inferior do contorno.
     if px < centro_x:
-        candidatos_lado = candidatos[candidatos[:, 0] <= centro_x]
+        lado_mask = candidatos[:, 0] <= centro_x
     else:
-        candidatos_lado = candidatos[candidatos[:, 0] >= centro_x]
+        lado_mask = candidatos[:, 0] >= centro_x
 
-    if len(candidatos_lado) >= 3:
-        candidatos = candidatos_lado
+    if np.count_nonzero(lado_mask) >= 3:
+        candidatos = candidatos[lado_mask]
+        indices_candidatos = indices_candidatos[lado_mask]
 
-    y_max = float(np.max(candidatos[:, 1]))
-    candidatos_base = candidatos[candidatos[:, 1] >= (y_max - 1.0)]
-    if len(candidatos_base) >= 1:
-        candidatos = candidatos_base
+    baseline_dist = np.abs(candidatos[:, 1] - float(baseline_y))
+    scores = baseline_dist + 0.5 * np.hypot(candidatos[:, 0] - px, candidatos[:, 1] - py)
+    for local_idx, point in enumerate(candidatos):
+        original_idx = int(indices_candidatos[local_idx]) if local_idx < len(indices_candidatos) else None
+        if original_idx is None:
+            continue
+        previous = gota_pts[(original_idx - 1) % len(gota_pts)]
+        following = gota_pts[(original_idx + 1) % len(gota_pts)]
+        transition_neighbors = [
+            gota_pts[(original_idx - offset) % len(gota_pts)]
+            for offset in range(1, min(5, max(1, len(gota_pts) // 20)) + 1)
+        ] + [
+            gota_pts[(original_idx + offset) % len(gota_pts)]
+            for offset in range(1, min(5, max(1, len(gota_pts) // 20)) + 1)
+        ]
+        horizontal_neighbors = int(abs(previous[1] - point[1]) <= 1.0) + int(abs(following[1] - point[1]) <= 1.0)
+        rising_neighbor = any(abs(float(point[1] - neighbor[1])) > 1.0 for neighbor in transition_neighbors)
+        scores[local_idx] += 12.0 * horizontal_neighbors
+        if rising_neighbor:
+            scores[local_idx] -= 4.0
 
-    dists = np.hypot(candidatos[:, 0] - px, candidatos[:, 1] - py)
-    idx = int(np.argmin(dists))
+    idx = int(np.argmin(scores))
     ponto_final = [float(candidatos[idx, 0]), float(candidatos[idx, 1])]
 
-    if abs(ponto_final[0] - px) <= tolerancia_px and abs(ponto_final[1] - py) <= tolerancia_px:
+    indice_original = int(np.argmin(np.linalg.norm(gota_pts - np.asarray([px, py]), axis=1)))
+    qualidade_original = avaliar_transicao_contato(
+        [px, py], gota_pts, baseline_y, indice=indice_original
+    )
+    dentro_tolerancia = (
+        abs(ponto_final[0] - px) <= tolerancia_px
+        and abs(ponto_final[1] - py) <= tolerancia_px
+    )
+    if dentro_tolerancia and qualidade_original["valida"]:
         return ponto_final, False
 
     return ponto_final, True
+
+
+def extrair_perfil_liquido_ar(gota_pts, p_esq, p_dir, baseline_y, margem_px=2.0):
+    """Retorna o caminho do contorno que representa o arco liquido-ar.
+
+    O contorno bruto pode ser fechado pela mascara Binary. Entre os indices
+    mais proximos dos contatos, escolhe-se o caminho que contem a elevacao da
+    gota acima da baseline e rejeita-se o fechamento inferior sobre o substrato.
+    """
+    resultado_invalido = {"valida": False, "motivo": "geometria_invalida", "indices": []}
+    if gota_pts is None or len(gota_pts) < 5 or p_esq is None or p_dir is None:
+        resultado_invalido["motivo"] = "dados_ausentes"
+        return np.empty((0, 2), dtype=float), resultado_invalido
+
+    pontos = np.asarray(gota_pts, dtype=float)
+    contato_esq = np.asarray(p_esq[:2], dtype=float)
+    contato_dir = np.asarray(p_dir[:2], dtype=float)
+    baseline = float(baseline_y)
+    if not np.isfinite(pontos).all() or not np.isfinite(contato_esq).all() or not np.isfinite(contato_dir).all() or not np.isfinite(baseline):
+        resultado_invalido["motivo"] = "valores_nao_finitos"
+        return np.empty((0, 2), dtype=float), resultado_invalido
+    if contato_esq[0] >= contato_dir[0]:
+        resultado_invalido["motivo"] = "contatos_fora_de_ordem"
+        return np.empty((0, 2), dtype=float), resultado_invalido
+
+    idx_esq = int(np.argmin(np.linalg.norm(pontos - contato_esq, axis=1)))
+    idx_dir = int(np.argmin(np.linalg.norm(pontos - contato_dir, axis=1)))
+    if idx_esq <= idx_dir:
+        caminhos = (
+            list(range(idx_esq, idx_dir + 1)),
+            list(range(idx_dir, len(pontos))) + list(range(0, idx_esq + 1)),
+        )
+    else:
+        caminhos = (
+            list(range(idx_esq, len(pontos))) + list(range(0, idx_dir + 1)),
+            list(range(idx_dir, idx_esq + 1)),
+        )
+
+    candidatos = []
+    for caminho in caminhos:
+        trecho = pontos[caminho]
+        acima = trecho[:, 1] < baseline - margem_px
+        abaixo = trecho[:, 1] > baseline + margem_px
+        if len(trecho) < 5 or int(np.count_nonzero(acima)) < 5:
+            continue
+        # Penaliza o fechamento inferior e privilegia o ramo elevado da gota.
+        score = int(np.count_nonzero(acima)) - 2 * int(np.count_nonzero(abaixo))
+        candidatos.append((score, caminho))
+
+    if not candidatos:
+        resultado_invalido["motivo"] = "perfil_superior_ausente"
+        return np.empty((0, 2), dtype=float), resultado_invalido
+
+    candidatos.sort(key=lambda item: item[0], reverse=True)
+    if len(candidatos) > 1 and candidatos[0][0] <= candidatos[1][0]:
+        resultado_invalido["motivo"] = "perfil_ambiguo"
+        return np.empty((0, 2), dtype=float), resultado_invalido
+
+    indices = candidatos[0][1]
+    perfil = pontos[indices]
+    resultado = {
+        "valida": True,
+        "motivo": "ok",
+        "indices": indices,
+        "pontos": int(len(perfil)),
+        "contato_esq_idx": idx_esq,
+        "contato_dir_idx": idx_dir,
+        "contato_esq_fisico": bool(np.linalg.norm(pontos[idx_esq] - contato_esq) <= 2.0),
+        "contato_dir_fisico": bool(np.linalg.norm(pontos[idx_dir] - contato_dir) <= 2.0),
+    }
+    return perfil, resultado

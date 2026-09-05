@@ -254,14 +254,14 @@ class SelectionWindow(ctk.CTk):
 
 
     def _gerar_binario_analise(self, roi):
-        """Gera máscara de análise robusta e escolhe o melhor contorno disponível."""
+        """Gera a máscara padrão compatível com o pipeline geométrico de referência."""
         try:
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            bin_mask, metodo = filtros.aplicar_multi_threshold(roi)
+            _, bin_mask = filtros.aplicar_filtro_binary_otsu(roi)
             mask_gota, pts = contorno.extrair_mascara_gota(bin_mask, img_gray=gray)
             q = contorno.avaliar_qualidade_contorno(pts, bin_mask.shape)
             return mask_gota, {
-                "mask_source": metodo,
+                "mask_source": "OTSU_BASE",
                 "quality_score": float(q.get("score", 0.0)),
                 "risk_flags": q.get("risk_flags", [])
             }
@@ -837,6 +837,8 @@ class ContactAngleApp(ctk.CTkToplevel):
             except Exception:
                 pass
         self.gota_pts = None
+        self.perfil_liquido_ar = None
+        self.validacao_perfil = None
 
 
         self.baseline_y = 0
@@ -919,9 +921,9 @@ class ContactAngleApp(ctk.CTkToplevel):
         Prioridade 2: Fallback Estatístico (apenas se a física falhar)
         """
         # 1. Obtém o contorno da gota através do módulo especializado
-        self.gota_pts = contorno.encontrar_contorno_gota_robusto(self.bin_image)
+        self.gota_pts = contorno.encontrar_contorno_gota(self.bin_image)
         if self.gota_pts is None:
-            self.gota_pts = contorno.encontrar_contorno_gota(self.bin_image)
+            self.gota_pts = contorno.encontrar_contorno_gota_robusto(self.bin_image)
         if self.gota_pts is None:
             messagebox.showerror("Erro", "Não foi possível detectar a silhueta da gota.")
             return
@@ -962,6 +964,19 @@ class ContactAngleApp(ctk.CTkToplevel):
         if self.p_dir is not None:
             self.p_dir = [float(self.p_dir[0]), float(self.p_dir[1])]
 
+        baseline_imagem, params_imagem, info_imagem = linha_base.detectar_baseline_superficie(
+            self.raw_image,
+            self.gota_pts,
+            fallback_y=self.baseline_y,
+        )
+        if info_imagem.get("valida") and baseline_imagem is not None:
+            self.baseline_y = float(baseline_imagem)
+            self.baseline_line_params = params_imagem
+            self.p_esq, self.p_dir = linha_base.find_contact_points_by_extrapolation(
+                self.gota_pts,
+                self.baseline_y,
+            )
+
         # Garante que a primeira análise já use contatos aderidos ao contorno.
         self._validar_corrigir_pontos_contato(origem="inicial")
 
@@ -985,6 +1000,7 @@ class ContactAngleApp(ctk.CTkToplevel):
 
         # --- TRAVA ABSOLUTA NO CHÃO ---
         if self.gota_pts is not None:
+            baseline_detectada = float(self.baseline_y)
             gray_raw = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2GRAY)
             _, thresh_bg = cv2.threshold(gray_raw, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
@@ -1001,17 +1017,33 @@ class ContactAngleApp(ctk.CTkToplevel):
 
             chao_real = float(max(y_esq, y_dir))
 
-            if chao_real > self.baseline_y:
+            # Só substitui a baseline quando a transição da imagem diverge
+            # claramente do piso detectado no contorno. Pequenas diferenças
+            # são espessura/ruído da linha e devem preservar o comportamento-base.
+            if abs(chao_real - baseline_detectada) > 10.0:
                 self.baseline_y = chao_real
+                p_esq, p_dir = linha_base.find_contact_points_by_extrapolation(
+                    self.gota_pts, self.baseline_y
+                )
+                if p_esq is not None and p_dir is not None:
+                    self.p_esq = p_esq
+                    self.p_dir = p_dir
 
         if self.baseline_line_params is not None:
             vx, vy, x0, _ = self.baseline_line_params
             self.baseline_line_params = (vx, vy, x0, self.baseline_y)
 
+        self.perfil_liquido_ar, self.validacao_perfil = contorno.extrair_perfil_liquido_ar(
+            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
+        )
+        if not self.validacao_perfil["valida"]:
+            messagebox.showerror("Geometria inválida", "O perfil líquido-ar não pôde ser separado do fechamento Binary.")
+            return
+
         print(f"Análise Concluída via: {self.contact_method}")
 
         fit_q = angulo_contato.calcular_qualidade_dinamica(
-            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
+            self.perfil_liquido_ar, self.p_esq, self.p_dir, self.baseline_y
         )
         self.fit_quality = fit_q
         q_pct = int(100 * float(fit_q.get("score", 0.0)))
@@ -1069,6 +1101,10 @@ class ContactAngleApp(ctk.CTkToplevel):
 
         self._validar_corrigir_pontos_contato(
             origem="ajuste_baseline"
+        )
+
+        self.perfil_liquido_ar, self.validacao_perfil = contorno.extrair_perfil_liquido_ar(
+            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
         )
 
         self.calculate()
@@ -1148,18 +1184,27 @@ class ContactAngleApp(ctk.CTkToplevel):
             self.res_m.configure(text="---")
             return
 
+        perfil = self.perfil_liquido_ar
+        if perfil is None or len(perfil) < 3:
+            self.ae = None
+            self.ad = None
+            self.res_e.configure(text="---")
+            self.res_d.configure(text="---")
+            self.res_m.configure(text="---")
+            return
+
         ae = angulo_contato.calcular_angulo_circular(
-            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y, "esq"
+            perfil, self.p_esq, self.p_dir, self.baseline_y, "esq"
         )
         ad = angulo_contato.calcular_angulo_circular(
-            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y, "dir"
+            perfil, self.p_esq, self.p_dir, self.baseline_y, "dir"
         )
 
         self.tangent_left = angulo_contato.calcular_vetor_tangente(
-            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y, "esq"
+            perfil, self.p_esq, self.p_dir, self.baseline_y, "esq"
         )
         self.tangent_right = angulo_contato.calcular_vetor_tangente(
-            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y, "dir"
+            perfil, self.p_esq, self.p_dir, self.baseline_y, "dir"
         )
 
         # Mantém None se cálculo falhar (melhor sinalização ao usuário)
@@ -1256,11 +1301,12 @@ class ContactAngleApp(ctk.CTkToplevel):
             return x * self.ratio + ox, y * self.ratio + oy
 
 
-        if self.gota_pts is not None:
+        perfil = self.perfil_liquido_ar
+        if perfil is not None and len(perfil) >= 2 and self.validacao_perfil and self.validacao_perfil.get("valida", False):
             if self._contorno_destacado:
-                desenho.desenhar_contorno_destaque(self.canvas, self.gota_pts, to_scr)
+                desenho.desenhar_contorno_destaque(self.canvas, perfil, to_scr)
             else:
-                desenho.desenhar_contorno(self.canvas, self.gota_pts, to_scr)
+                desenho.desenhar_contorno(self.canvas, perfil, to_scr)
 
 
         if self.baseline_y is not None:
@@ -1388,6 +1434,9 @@ class ContactAngleApp(ctk.CTkToplevel):
         elif self.dragging_point == 'dir':
             self.p_dir = novo_ponto
 
+        self.perfil_liquido_ar, self.validacao_perfil = contorno.extrair_perfil_liquido_ar(
+            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
+        )
         self.calculate()
 
 

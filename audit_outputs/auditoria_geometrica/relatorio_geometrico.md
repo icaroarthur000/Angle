@@ -125,8 +125,8 @@ Objetivo: verificar se os pontos usados para cada tangente estão próximos do p
 - Quantidade total selecionada: 333
 - Faixa de y usada: [169.000000, 304.000000]
 - Distância vertical até a baseline: 0.000000
-- Inclinação da tangente: 1.996893
-- Ângulo da tangente em relação à horizontal: 63.399299
+- Inclinação da tangente: 3.807086
+- Ângulo da tangente em relação à horizontal: 75.282688
 - Método efetivamente usado: círculo
 - Sequência contínua no contorno: sim
 - Wrap-around: não
@@ -150,8 +150,8 @@ Objetivo: verificar se os pontos usados para cada tangente estão próximos do p
 - Quantidade total selecionada: 387
 - Faixa de y usada: [139.000000, 257.000000]
 - Distância vertical até a baseline: 0.000000
-- Inclinação da tangente: -4.555084
-- Ângulo da tangente em relação à horizontal: 102.381998
+- Inclinação da tangente: -5.996243
+- Ângulo da tangente em relação à horizontal: 99.468144
 - Método efetivamente usado: círculo
 - Sequência contínua no contorno: não
 - Wrap-around: não
@@ -169,8 +169,8 @@ Objetivo: verificar se os pontos usados para cada tangente estão próximos do p
 - Quantidade total selecionada: 387
 - Faixa de y usada: [139.000000, 257.000000]
 - Distância vertical até a baseline: 0.000000
-- Inclinação da tangente: 4.554673
-- Ângulo da tangente em relação à horizontal: 77.616919
+- Inclinação da tangente: -5.918693
+- Ângulo da tangente em relação à horizontal: 99.589910
 - Método efetivamente usado: círculo
 - Sequência contínua no contorno: não
 - Wrap-around: não
@@ -194,8 +194,8 @@ Objetivo: verificar se os pontos usados para cada tangente estão próximos do p
 - Quantidade total selecionada: 381
 - Faixa de y usada: [221.000000, 221.000000]
 - Distância vertical até a baseline: 0.000000
-- Inclinação da tangente: 0.139832
-- Ângulo da tangente em relação à horizontal: 7.960161
+- Inclinação da tangente: -1.416673
+- Ângulo da tangente em relação à horizontal: 125.217468
 - Método efetivamente usado: círculo
 - Sequência contínua no contorno: sim
 - Wrap-around: não
@@ -213,8 +213,8 @@ Objetivo: verificar se os pontos usados para cada tangente estão próximos do p
 - Quantidade total selecionada: 221
 - Faixa de y usada: [133.000000, 221.000000]
 - Distância vertical até a baseline: 0.000000
-- Inclinação da tangente: 6.030812
-- Ângulo da tangente em relação à horizontal: 80.585154
+- Inclinação da tangente: 1.072029
+- Ângulo da tangente em relação à horizontal: 46.990947
 - Método efetivamente usado: círculo
 - Sequência contínua no contorno: sim
 - Wrap-around: não

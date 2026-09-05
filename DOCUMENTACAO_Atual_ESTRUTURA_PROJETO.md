@@ -1,6 +1,6 @@
 # Documentacao Matematica do Sistema Angle
 
-Data: 30 de marco de 2026
+Data: 05 de setembro de 2026
 Projeto: Angle - Contact Angle Measurement System
 Objetivo: documentar TODAS as formulas matematicas realmente usadas no codigo atual, em ordem de execucao.
 
@@ -9,11 +9,11 @@ Objetivo: documentar TODAS as formulas matematicas realmente usadas no codigo at
 ## 1. Fluxo Matematico Completo (ordem de execucao)
 
 1. Selecao da ROI (usuario) e conversao de coordenadas tela-imagem em `main.py`
-2. Pre-processamento da ROI (caminho principal em `processamento_imagem/filtros.py`, com fallback robusto em `processamento_imagem/preprocess.py`)
-3. Extracao do contorno em `processamento_imagem/contorno.py`
-4. Deteccao da baseline e pontos de contato em `linha_base/linha_base.py`
-5. Calculo angular principal circular + fallback polinomial em `Cal_angulo/angulo_contato.py`
-6. Conversoes de visualizacao e desenho das tangentes em `visualizacao/desenho.py`
+2. Pre-processamento da ROI e escolha manual de mascara Otsu ou Canny em `processamento_imagem/filtros.py` e `main.py`
+3. Separacao gota-substrato, extracao e validacao do contorno em `processamento_imagem/contorno.py`
+4. Deteccao hibrida da baseline e determinacao dos pontos de contato em `linha_base/linha_base.py` e `main.py`
+5. Extracao do perfil liquido-ar, calculo angular circular e fallback polinomial em `Cal_angulo/angulo_contato.py`
+6. Conversoes de visualizacao e desenho do contorno, baseline, contatos e tangentes em `visualizacao/desenho.py`
 
 ---
 
@@ -57,7 +57,7 @@ onde:
 
 ## 3. Pre-processamento (formulas realmente implementadas)
 
-## 3.1 Caminho principal: filtros.py
+## 3.1 Caminho usado na interface: Otsu ou Canny
 
 Arquivo: `processamento_imagem/filtros.py`
 
@@ -77,13 +77,21 @@ Bin = THRESH_BINARY_INV + OTSU(Blur)
 
 Bin = CLOSE(Bin, kernel_eliptico 5x5, iter=1)
 
-## 3.2 Caminho robusto (fallback): preprocess.py
+O usuario pode escolher a mascara Otsu, a mascara de bordas Canny ou manter o modo automatico da interface. O modo automatico atual usa a rota Otsu; a funcao `aplicar_multi_threshold` existe como utilitario de avaliacao de candidatos, mas nao e a rota principal acionada por `main.py`.
+
+Para Canny, o sistema aplica:
+
+Edges = Canny(GaussianBlur(Gray, (5,5)), 30, 100)
+
+e posteriormente realiza fechamento morfologico eliptico 3x3 com duas iteracoes antes da extracao da mascara.
+
+## 3.2 Caminho robusto disponivel: preprocess.py
 
 Arquivo: `processamento_imagem/preprocess.py`
 
-Observacao de acionamento:
-- Esta rota nao e chamada por falha de contorno.
-- Ela e acionada quando a etapa principal de pre-processamento (`filtros.py`) gera excecao no `try/except` de `main.py`.
+Observacao de integracao:
+- O modulo e importado por compatibilidade e disponibiliza uma rota robusta de correcao de iluminacao.
+- A interface atual nao o usa como rota principal de analise; a mascara efetivamente enviada para analise e produzida por Otsu ou Canny, conforme a selecao da interface.
 
 ### 3.2.1 Estimativa de fundo
 
@@ -141,27 +149,47 @@ Binary = CLOSE(Binary, kernel_eliptico 3x3, iter=1)
 
 ---
 
-## 4. Deteccao de Contorno (contorno.py)
+## 4. Deteccao, separacao e validacao do contorno (contorno.py)
 
 Arquivo: `processamento_imagem/contorno.py`
 
-1. Fechamento inicial:
+Antes da extracao do contorno, a mascara passa por uma cascata de separacao gota-substrato. Essa etapa evita que a gota seja analisada juntamente com uma faixa horizontal do piso produzida pela binarizacao.
+
+1. Abertura anisotropica:
+
+OPEN(Bin, kernel_retangular 9x3)
+
+O resultado fornece uma estimativa alternativa da base e ajuda a quebrar pontes horizontais entre gota e substrato.
+
+2. Deteccao de necking:
+
+Largura(y) = soma_x(Bin(x,y) > 0)
+
+O menor vale significativo entre 55% e 95% da altura da gota e tratado como candidato a linha de separacao.
+
+3. Deteccao por Sobel vertical:
+
+SobelY = Sobel(Gray, dx=0, dy=1, ksize=3)
+
+O pico da projecao horizontal de |SobelY| na metade inferior da ROI fornece outro candidato a superficie. Os candidatos de necking e Sobel sao combinados por confianca; quando divergem, prevalece o de maior confianca. Uma protecao anti-amputacao impede corte acima de 70% da altura estimada da gota.
+
+4. Fechamento inicial para o contorno:
 
 Processed = CLOSE(img, kernel 3x3, iter=1)
 
-2. Mascara de borda preta:
+5. Mascara de borda preta:
 
 rectangle(thickness=10) nas bordas da imagem
 
-3. Extracao de contorno externo:
+6. Extracao de contorno externo:
 
 findContours(Processed, RETR_EXTERNAL, CHAIN_APPROX_NONE)
 
-4. Fallback por Canny se vazio:
+7. Fallback por Canny se vazio:
 
 Edges = Canny(img, 30, 100)
 
-5. Filtro topologico por toque em bordas (margem=5):
+8. Filtros geometricos e topologicos:
 
 touches_left = any(x <= 5)
 
@@ -175,13 +203,17 @@ border_count = touches_left + touches_right + touches_top + touches_bottom
 
 aceita se border_count < 3
 
-6. Filtro de area:
+Tambem sao exigidos area minima de 100 pixels, dimensoes minimas de 20 pixels, razao de aspecto menor ou igual a 8, circularidade minima configuravel (padrao 0,35), convexidade minima de 0,7 e preenchimento minimo de 0,5 no retangulo envolvente. Faixas horizontais largas e baixas sao penalizadas ou rejeitadas como substrato.
 
 area(contorno) >= 100
 
-7. Filtro final de pontos (margem=10):
+9. Filtro final de pontos:
 
-10 < x < w-10 e 10 < y < h-10
+Os pontos muito proximos das laterais ou do topo sao removidos com margem adaptativa proporcional ao tamanho da ROI.
+
+## 4.1 Perfil liquido-ar
+
+O contorno de uma mascara preenchida e fechado e pode conter um segmento artificial sobre o substrato. A funcao `extrair_perfil_liquido_ar` localiza os indices dos dois contatos, compara os dois caminhos possiveis do contorno fechado e seleciona o arco que possui elevacao acima da baseline. Trechos abaixo da baseline recebem penalidade. Se nao houver ramo superior inequivoco, a geometria e rejeitada e o angulo nao e calculado.
 
 ---
 
@@ -219,13 +251,19 @@ MAD = median(abs(d - median(d)))
 
 limiar = max(BASELINE_INLIER_MIN_PIXELS, BASELINE_INLIER_MAD_SCALE * 1.4826 * MAD)
 
-3. Baseline final robusta:
+3. Baseline inicial robusta:
 
 Y_base = quantile(Y_inliers, 0.90)
 
 4. Fallback conservador:
 
 Y_base = max(Y_contorno)
+
+## 5.2.1 Refinamento pela superficie da imagem e trava fisica
+
+Na interface, a baseline inicial tambem e comparada com a superficie detectada na imagem original. O metodo aplica Otsu normal na imagem cinza e procura, em colunas imediatamente externas a silhueta da gota, a primeira sequencia vertical escura persistente. A mediana dessas transicoes define a superficie quando sua dispersao e pequena.
+
+Ha ainda uma trava adicional no fluxo da interface: duas colunas proximas aos limites laterais da gota sao inspecionadas e, se o piso detectado divergir mais de 10 pixels da baseline corrente, a baseline e substituida pelo piso detectado e os contatos sao recalculados. Portanto, a baseline final e uma referencia hibrida, baseada no contorno e na evidencia fotometrica do substrato.
 
 ## 5.3 Extrapolacao polinomial de contato
 
@@ -295,7 +333,7 @@ Observacao de estrategia:
 - O motor sempre tenta primeiro o ajuste circular.
 - O fallback polinomial e acionado por falha geometrica/numerica (ex.: raio invalido, baseline fora do circulo, erro de solucao).
 
-## 6.1 Calibracao de baseline
+## 6.1 Calibracao de baseline configuravel e uso efetivo
 
 offset_calibracao = clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota,
 						 ANGLE_BASELINE_OFFSET_MIN,
@@ -303,13 +341,15 @@ offset_calibracao = clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota,
 
 Y_base_ajustada = Y_base + offset_calibracao
 
-## 6.2 Janela de pontos para ajuste
+As constantes acima sao usadas em funcoes auxiliares, no calculo de qualidade e na selecao do perfil para a tangente vetorial. Contudo, a funcao principal atualmente usada para exibir o angulo (`calcular_angulo_circular`) emprega uma configuracao fixa:
 
-window_height = clip(ANGLE_WINDOW_HEIGHT_FACTOR * altura_gota,
-					 ANGLE_WINDOW_HEIGHT_MIN,
-					 ANGLE_WINDOW_HEIGHT_MAX)
+Y_base_ajustada = Y_base + 3.0 pixels
 
-mask = (Y < Y_base_ajustada - 3) AND (Y > Y_base_ajustada - window_height)
+## 6.2 Janela de pontos do calculo angular principal
+
+mask = (Y < Y_base_ajustada - 3.0) AND (Y > Y_base_ajustada - 150.0)
+
+Logo, a janela do calculo angular principal possui altura fixa de 150 pixels. Os parametros dinamicos documentados anteriormente nao controlam essa funcao no estado atual do codigo.
 
 ## 6.3 Selecao por lado
 
@@ -470,6 +510,14 @@ theta = atan(1 / (dX/dY))  (ou 90 graus se derivada zero)
 - lado dir: se theta>0, theta=180-theta; senao usa |theta|
 
 5. Saturacao final: [0, 180]
+
+---
+
+## 6.11 Tangente vetorial exibida na interface
+
+A reta azul mostrada na interface e calculada separadamente por `calcular_vetor_tangente`. Ela utiliza o perfil liquido-ar aberto e ordenado, seleciona no maximo sete pontos contiguos ao contato e ajusta o polinomio `X(Y)=aY^2+bY+c`. A inclinacao e `m = 1/(2aY_contato+b)` e o vetor exibido e normalizado como `(1,m)/hypot(1,m)`.
+
+Esse vetor tem funcao de auditoria visual. O valor angular exibido permanece o resultado de `calcular_angulo_circular`, com fallback polinomial apenas quando o ajuste circular falha.
 
 ---
 

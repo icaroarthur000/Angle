@@ -1,6 +1,88 @@
 import numpy as np
 import pytest
+import cv2
 from Cal_angulo import angulo_contato
+from processamento_imagem import contorno
+from linha_base import linha_base
+
+
+def test_extrai_perfil_liquido_ar_sem_fechamento_inferior():
+    contour = np.array([
+        [0.0, 100.0], [0.0, 80.0], [10.0, 50.0], [20.0, 40.0],
+        [30.0, 50.0], [40.0, 80.0], [40.0, 100.0], [20.0, 100.0],
+    ])
+
+    profile, metadata = contorno.extrair_perfil_liquido_ar(
+        contour, [0.0, 100.0], [40.0, 100.0], 100.0
+    )
+
+    assert metadata["valida"] is True
+    assert len(profile) == 7
+    assert np.all(profile[:, 1] <= 100.0)
+    assert np.any(profile[:, 1] < 100.0)
+
+
+def test_extrai_perfil_liquido_ar_rejeita_contorno_sem_ramo_superior():
+    contour = np.array([
+        [0.0, 100.0], [10.0, 100.0], [20.0, 100.0],
+        [30.0, 100.0], [40.0, 100.0], [0.0, 100.0],
+    ])
+
+    profile, metadata = contorno.extrair_perfil_liquido_ar(
+        contour, [0.0, 100.0], [40.0, 100.0], 100.0
+    )
+
+    assert metadata["valida"] is False
+    assert len(profile) == 0
+
+
+def test_projecao_contato_prefere_transicao_ao_fechamento_horizontal():
+    contour = np.array([
+        [0.0, 100.0], [1.0, 100.0], [2.0, 100.0], [3.0, 99.0],
+        [4.0, 90.0], [5.0, 80.0], [6.0, 70.0], [7.0, 80.0],
+        [8.0, 90.0], [9.0, 99.0], [10.0, 100.0], [11.0, 100.0],
+    ])
+
+    projected, corrected = contorno.projetar_ponto_no_contorno(
+        [2.5, 100.0], contour, 100.0, tolerancia_px=2.0
+    )
+
+    assert corrected is True
+    assert projected == [3.0, 99.0]
+
+
+def test_avalia_transicao_contato_rejeita_piso_horizontal():
+    contour = np.array([
+        [0.0, 100.0], [1.0, 100.0], [2.0, 100.0], [3.0, 99.0],
+        [4.0, 90.0], [5.0, 80.0], [6.0, 70.0],
+    ])
+
+    piso = contorno.avaliar_transicao_contato([1.0, 100.0], contour, 100.0, indice=1)
+    transicao = contorno.avaliar_transicao_contato([3.0, 99.0], contour, 100.0, indice=3)
+
+    assert piso["valida"] is False
+    assert transicao["valida"] is True
+    assert transicao["qualidade"] > piso["qualidade"]
+
+
+def test_detecta_baseline_na_superficie_real_e_nao_no_fechamento_binary():
+    image = np.full((120, 160), 255, dtype=np.uint8)
+    image[80:, :] = 0
+    contour = np.array([
+        [30.0, 80.0], [35.0, 60.0], [60.0, 30.0],
+        [100.0, 30.0], [125.0, 60.0], [130.0, 80.0],
+        [130.0, 119.0], [30.0, 119.0],
+    ])
+
+    baseline, params, metadata = linha_base.detectar_baseline_superficie(
+        image,
+        contour,
+        fallback_y=119.0,
+    )
+
+    assert metadata["valida"] is True
+    assert baseline == 80.0
+    assert params[3] == 80.0
 
 
 def test_angulo_interno_semicirculo_horizontal():

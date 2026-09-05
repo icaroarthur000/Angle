@@ -212,17 +212,29 @@ def _selecionar_pontos_tangente(
     # Um perfil extraído já está ordenado e aberto; não o reinterprete como
     # contorno cíclico nem procure um ramo alternativo no fechamento.
     if profile_open:
-        if p_contato is None or len(p_contato) < 2:
-            selected_points = points[: min(7, len(points))]
-        else:
-            contact_local_idx = int(np.argmin(np.linalg.norm(points - np.asarray(p_contato[:2], dtype=float), axis=1)))
-            window_size = min(7, len(points))
-            start_idx = max(0, min(contact_local_idx - window_size // 2, len(points) - window_size))
-            selected_points = points[start_idx:start_idx + window_size]
+        n = len(points)
+        # O perfil aberto ja tem o contato exatamente no extremo (indice_perfil_esq/dir);
+        # ancora nesse extremo em vez de redescobri-lo por distancia.
+        contact_local_idx = None
+        if lado in ("esq", "dir"):
+            ancora_idx = 0 if lado == "esq" else n - 1
+            if p_contato is None or len(p_contato) < 2:
+                contact_local_idx = ancora_idx
+            elif np.linalg.norm(points[ancora_idx] - np.asarray(p_contato[:2], dtype=float)) <= 5.0:
+                contact_local_idx = ancora_idx
+        if contact_local_idx is None:
+            # Fallback defensivo: mantido apenas se a ancora estrutural nao bater com p_contato.
+            if p_contato is None or len(p_contato) < 2:
+                contact_local_idx = 0
+            else:
+                contact_local_idx = int(np.argmin(np.linalg.norm(points - np.asarray(p_contato[:2], dtype=float), axis=1)))
+        window_size = min(7, n)
+        start_idx = max(0, min(contact_local_idx - window_size // 2, n - window_size))
+        selected_points = points[start_idx:start_idx + window_size]
         if len(selected_points) >= 4:
             set_audit_context(last_tangent_selection={
-                "contact_idx": contact_local_idx if p_contato is not None and len(p_contato) >= 2 else 0,
-                "selected_indices": list(range(start_idx, start_idx + len(selected_points))) if p_contato is not None and len(p_contato) >= 2 else list(range(len(selected_points))),
+                "contact_idx": contact_local_idx,
+                "selected_indices": list(range(start_idx, start_idx + len(selected_points))),
                 "selected_count": int(len(selected_points)),
                 "contiguous": True,
                 "profile_open": True,
@@ -472,6 +484,16 @@ def calcular_vetor_tangente(
     return _normalizar_vetor_tangente(m_tangente)
 
 
+def _validar_dominio_angulo(theta_deg: Optional[float]) -> Optional[float]:
+    """Rejeita (None) NaN/infinito/<=0/>=180 em vez de mascarar com clip."""
+    if theta_deg is None:
+        return None
+    theta = float(theta_deg)
+    if not np.isfinite(theta) or theta <= 0.0 or theta >= 180.0:
+        return None
+    return theta
+
+
 def calcular_angulo_circular(
     gota_pts: np.ndarray,
     p_esq: Union[list, tuple],
@@ -485,6 +507,8 @@ def calcular_angulo_circular(
         return None
     if lado not in ("esq", "dir"):
         return None
+
+    contato_validado = p_esq if lado == "esq" else p_dir
 
     offset_calibracao = 3.0
     baseline_ajustada = float(baseline_y) + offset_calibracao
@@ -505,7 +529,7 @@ def calcular_angulo_circular(
     try:
         xc0, yc0, R0 = ajustar_circulo_algebrico(local_pts_centered)
     except Exception:
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+        return _validar_dominio_angulo(_calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado))
 
     dists = np.hypot(local_pts_centered[:, 0] - xc0, local_pts_centered[:, 1] - yc0)
     residuals = np.abs(dists - R0)
@@ -521,19 +545,24 @@ def calcular_angulo_circular(
     try:
         xc, yc, R = ajustar_circulo_algebrico(local_pts_filtered)
     except Exception:
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+        return _validar_dominio_angulo(_calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado))
 
     yc += mean_xy[1]
     xc += mean_xy[0]
     if R is None or R <= 0:
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+        return _validar_dominio_angulo(_calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado))
 
     dy = baseline_ajustada - yc
     if abs(dy) >= R:
-        return _calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado)
+        return _validar_dominio_angulo(_calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado))
 
     dx = math.sqrt(max(0.0, R ** 2 - dy ** 2))
     x_contato = xc - dx if lado == "esq" else xc + dx
+
+    # x_contato e so verificacao geometrica; a ancora fisica permanece o contato validado.
+    if abs(x_contato - float(contato_validado[0])) > ANGLE_CONTACT_CANDIDATE_MAX_DIST:
+        return _validar_dominio_angulo(_calcular_angulo_polynomial_fallback(local_pts, baseline_y, lado))
+
     denominador = baseline_ajustada - yc
     if abs(denominador) < 1e-12:
         theta_deg = 90.0
@@ -544,7 +573,7 @@ def calcular_angulo_circular(
     if yc > baseline_ajustada:
         theta_deg = 180.0 - theta_deg
 
-    return float(np.clip(theta_deg, 0.0, 180.0))
+    return _validar_dominio_angulo(theta_deg)
 
 
 def calcular_qualidade_dinamica(

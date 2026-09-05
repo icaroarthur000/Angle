@@ -713,12 +713,16 @@ def projetar_ponto_no_contorno(ponto, gota_pts, baseline_y,
     return ponto_final, True
 
 
-def extrair_perfil_liquido_ar(gota_pts, p_esq, p_dir, baseline_y, margem_px=2.0):
+def extrair_perfil_liquido_ar(gota_pts, p_esq, p_dir, baseline_y, margem_px=2.0,
+                               indice_esq=None, indice_dir=None):
     """Retorna o caminho do contorno que representa o arco liquido-ar.
 
     O contorno bruto pode ser fechado pela mascara Binary. Entre os indices
     mais proximos dos contatos, escolhe-se o caminho que contem a elevacao da
     gota acima da baseline e rejeita-se o fechamento inferior sobre o substrato.
+
+    Se `indice_esq`/`indice_dir` forem informados (ancora ja validada), sao
+    usados diretamente; a busca por distancia so ocorre como fallback.
     """
     resultado_invalido = {"valida": False, "motivo": "geometria_invalida", "indices": []}
     if gota_pts is None or len(gota_pts) < 5 or p_esq is None or p_dir is None:
@@ -736,8 +740,14 @@ def extrair_perfil_liquido_ar(gota_pts, p_esq, p_dir, baseline_y, margem_px=2.0)
         resultado_invalido["motivo"] = "contatos_fora_de_ordem"
         return np.empty((0, 2), dtype=float), resultado_invalido
 
-    idx_esq = int(np.argmin(np.linalg.norm(pontos - contato_esq, axis=1)))
-    idx_dir = int(np.argmin(np.linalg.norm(pontos - contato_dir, axis=1)))
+    if indice_esq is not None and 0 <= int(indice_esq) < len(pontos):
+        idx_esq = int(indice_esq)
+    else:
+        idx_esq = int(np.argmin(np.linalg.norm(pontos - contato_esq, axis=1)))
+    if indice_dir is not None and 0 <= int(indice_dir) < len(pontos):
+        idx_dir = int(indice_dir)
+    else:
+        idx_dir = int(np.argmin(np.linalg.norm(pontos - contato_dir, axis=1)))
     if idx_esq <= idx_dir:
         caminhos = (
             list(range(idx_esq, idx_dir + 1)),
@@ -770,6 +780,9 @@ def extrair_perfil_liquido_ar(gota_pts, p_esq, p_dir, baseline_y, margem_px=2.0)
         return np.empty((0, 2), dtype=float), resultado_invalido
 
     indices = candidatos[0][1]
+    # Normaliza para que o perfil sempre comece na ancora esquerda e termine na direita.
+    if indices[0] == idx_dir and indices[-1] == idx_esq:
+        indices = list(reversed(indices))
     perfil = pontos[indices]
     resultado = {
         "valida": True,
@@ -778,6 +791,8 @@ def extrair_perfil_liquido_ar(gota_pts, p_esq, p_dir, baseline_y, margem_px=2.0)
         "pontos": int(len(perfil)),
         "contato_esq_idx": idx_esq,
         "contato_dir_idx": idx_dir,
+        "indice_perfil_esq": 0,
+        "indice_perfil_dir": int(len(perfil) - 1),
         "contato_esq_fisico": bool(np.linalg.norm(pontos[idx_esq] - contato_esq) <= 2.0),
         "contato_dir_fisico": bool(np.linalg.norm(pontos[idx_dir] - contato_dir) <= 2.0),
     }

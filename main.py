@@ -847,6 +847,8 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.p_esq = None
         self.p_dir = None
         self.contact_method = None
+        self.indice_contato_esq = None
+        self.indice_contato_dir = None
         self.fit_quality = {"score": 0.0, "rmse_px": 999.0, "n_pts": 2.0}
 
 
@@ -1028,13 +1030,18 @@ class ContactAngleApp(ctk.CTkToplevel):
                 if p_esq is not None and p_dir is not None:
                     self.p_esq = p_esq
                     self.p_dir = p_dir
+                    # A trava sobrescreveu os contatos; revalida pela mesma ancora usada antes.
+                    self._validar_corrigir_pontos_contato(origem="trava_chao")
+
+        self._atualizar_indices_contato()
 
         if self.baseline_line_params is not None:
             vx, vy, x0, _ = self.baseline_line_params
             self.baseline_line_params = (vx, vy, x0, self.baseline_y)
 
         self.perfil_liquido_ar, self.validacao_perfil = contorno.extrair_perfil_liquido_ar(
-            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
+            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y,
+            indice_esq=self.indice_contato_esq, indice_dir=self.indice_contato_dir
         )
         if not self.validacao_perfil["valida"]:
             messagebox.showerror("Geometria inválida", "O perfil líquido-ar não pôde ser separado do fechamento Binary.")
@@ -1102,9 +1109,11 @@ class ContactAngleApp(ctk.CTkToplevel):
         self._validar_corrigir_pontos_contato(
             origem="ajuste_baseline"
         )
+        self._atualizar_indices_contato()
 
         self.perfil_liquido_ar, self.validacao_perfil = contorno.extrair_perfil_liquido_ar(
-            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
+            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y,
+            indice_esq=self.indice_contato_esq, indice_dir=self.indice_contato_dir
         )
 
         self.calculate()
@@ -1150,6 +1159,18 @@ class ContactAngleApp(ctk.CTkToplevel):
 
         if houve_correcao:
             self._ativar_destaque_contorno(400)
+
+
+    def _atualizar_indices_contato(self):
+        """Resolve o indice em gota_pts do contato ja validado (ancora unica por lado)."""
+        self.indice_contato_esq = None
+        self.indice_contato_dir = None
+        if self.gota_pts is None:
+            return
+        if self.p_esq is not None:
+            self.indice_contato_esq = int(np.argmin(np.linalg.norm(self.gota_pts - np.asarray(self.p_esq), axis=1)))
+        if self.p_dir is not None:
+            self.indice_contato_dir = int(np.argmin(np.linalg.norm(self.gota_pts - np.asarray(self.p_dir), axis=1)))
 
 
     def _ativar_destaque_contorno(self, duracao_ms: int = 400):
@@ -1434,8 +1455,11 @@ class ContactAngleApp(ctk.CTkToplevel):
         elif self.dragging_point == 'dir':
             self.p_dir = novo_ponto
 
+        self._atualizar_indices_contato()
+
         self.perfil_liquido_ar, self.validacao_perfil = contorno.extrair_perfil_liquido_ar(
-            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y
+            self.gota_pts, self.p_esq, self.p_dir, self.baseline_y,
+            indice_esq=self.indice_contato_esq, indice_dir=self.indice_contato_dir
         )
         self.calculate()
 

@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 _log = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+CONFIG_PATH = Path(__file__).resolve().parent / "configuracao.json"
 
 DEFAULTS: Dict[str, Any] = {
     "baseline_bottom_fraction": 0.10,
@@ -45,7 +45,7 @@ def carregar_parametros(force_reload: bool = False) -> Dict[str, Any]:
             if isinstance(raw, dict):
                 data.update(raw)
         except Exception as e:
-            _log.warning("Falha ao ler %s: %s. Usando valores padrão.", CONFIG_PATH, e)
+            _log.warning("Falha ao ler %s: %s. Usando valores padrÃ£o.", CONFIG_PATH, e)
 
     _CACHE = data
     return data

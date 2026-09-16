@@ -2,4 +2,11 @@ __pycache__/
 *.pyc
 .vscode/
 .env
-.md
+
+# Saidas geradas por auditorias e investigacoes locais
+resultados_auditoria/
+temp_*.py
+tmp_*.py
+patch_selector.py
+inspect_window_audit.py
+summarize_window_audit.py

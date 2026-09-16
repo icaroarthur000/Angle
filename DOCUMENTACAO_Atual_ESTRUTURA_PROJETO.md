@@ -8,16 +8,16 @@ Objetivo: documentar TODAS as formulas matematicas realmente usadas no codigo at
 
 ## 1. Fluxo Matematico Completo (ordem de execucao)
 
-1. Selecao da ROI (usuario) e conversao de coordenadas tela-imagem em `main.py`
-2. Pre-processamento da ROI e escolha manual de mascara Otsu ou Canny em `processamento_imagem/filtros.py` e `main.py`
+1. Selecao da ROI (usuario) e conversao de coordenadas tela-imagem em `interface/janela_selecao.py`
+2. Pre-processamento da ROI e escolha manual de mascara Otsu ou Canny em `processamento_imagem/filtros.py` e `interface/janela_selecao.py`
 3. Separacao gota-substrato, extracao e validacao do contorno em `processamento_imagem/contorno.py`
-4. Deteccao hibrida da baseline e determinacao dos pontos de contato em `linha_base/linha_base.py` e `main.py`
+4. Deteccao hibrida da baseline e determinacao dos pontos de contato em `linha_base/linha_base.py` e `interface/aplicativo_angulo_contato.py`
 5. Extracao do perfil liquido-ar, calculo angular circular e fallback polinomial em `Cal_angulo/angulo_contato.py`
 6. Conversoes de visualizacao e desenho do contorno, baseline, contatos e tangentes em `visualizacao/desenho.py`
 
 ---
 
-## 2. Coordenadas e ROI (main.py)
+## 2. Coordenadas e ROI (interface/janela_selecao.py e interface/aplicativo_angulo_contato.py)
 
 ### 2.1 Conversao tela -> imagem
 Usada em `SelectionWindow.canvas_to_img`:
@@ -77,7 +77,7 @@ Bin = THRESH_BINARY_INV + OTSU(Blur)
 
 Bin = CLOSE(Bin, kernel_eliptico 5x5, iter=1)
 
-O usuario pode escolher a mascara Otsu, a mascara de bordas Canny ou manter o modo automatico da interface. O modo automatico atual usa a rota Otsu; a funcao `aplicar_multi_threshold` existe como utilitario de avaliacao de candidatos, mas nao e a rota principal acionada por `main.py`.
+O usuario pode escolher a mascara Otsu, a mascara de bordas Canny ou manter o modo automatico da interface. O modo automatico atual usa a rota Otsu; a funcao `aplicar_multi_threshold` existe como utilitario de avaliacao de candidatos, mas nao e a rota principal acionada por `interface/janela_selecao.py`.
 
 Para Canny, o sistema aplica:
 
@@ -85,9 +85,9 @@ Edges = Canny(GaussianBlur(Gray, (5,5)), 30, 100)
 
 e posteriormente realiza fechamento morfologico eliptico 3x3 com duas iteracoes antes da extracao da mascara.
 
-## 3.2 Caminho robusto disponivel: preprocess.py
+## 3.2 Caminho robusto disponivel: preprocessamento.py
 
-Arquivo: `processamento_imagem/preprocess.py`
+Arquivo: `processamento_imagem/preprocessamento.py`
 
 Observacao de integracao:
 - O modulo e importado por compatibilidade e disponibiliza uma rota robusta de correcao de iluminacao.
@@ -341,15 +341,19 @@ offset_calibracao = clip(ANGLE_BASELINE_OFFSET_FACTOR * altura_gota,
 
 Y_base_ajustada = Y_base + offset_calibracao
 
-As constantes acima sao usadas em funcoes auxiliares, no calculo de qualidade e na selecao do perfil para a tangente vetorial. Contudo, a funcao principal atualmente usada para exibir o angulo (`calcular_angulo_circular`) emprega uma configuracao fixa:
-
-Y_base_ajustada = Y_base + 3.0 pixels
+As constantes acima tambem sao usadas pela funcao principal atualmente usada para exibir o angulo (`calcular_angulo_circular`).
 
 ## 6.2 Janela de pontos do calculo angular principal
 
-mask = (Y < Y_base_ajustada - 3.0) AND (Y > Y_base_ajustada - 150.0)
+altura_gota = max(Y) - min(Y)
 
-Logo, a janela do calculo angular principal possui altura fixa de 150 pixels. Os parametros dinamicos documentados anteriormente nao controlam essa funcao no estado atual do codigo.
+altura_janela = clip(ANGLE_WINDOW_HEIGHT_FACTOR * altura_gota,
+					 ANGLE_WINDOW_HEIGHT_MIN,
+					 ANGLE_WINDOW_HEIGHT_MAX)
+
+mask = (Y <= Y_base_ajustada) AND (Y > Y_base_ajustada - altura_janela)
+
+Assim, tanto o deslocamento da baseline quanto a altura da janela sao configuraveis em `configuracao.json`.
 
 ## 6.3 Selecao por lado
 

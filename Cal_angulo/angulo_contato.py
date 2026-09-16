@@ -510,10 +510,20 @@ def calcular_angulo_circular(
 
     contato_validado = p_esq if lado == "esq" else p_dir
 
-    offset_calibracao = 3.0
+    altura_gota = float(np.max(gota_pts[:, 1]) - np.min(gota_pts[:, 1]))
+    offset_calibracao = float(np.clip(
+        ANGLE_BASELINE_OFFSET_FACTOR * altura_gota,
+        ANGLE_BASELINE_OFFSET_MIN,
+        ANGLE_BASELINE_OFFSET_MAX,
+    ))
     baseline_ajustada = float(baseline_y) + offset_calibracao
+    window_height = int(np.clip(
+        ANGLE_WINDOW_HEIGHT_FACTOR * altura_gota,
+        ANGLE_WINDOW_HEIGHT_MIN,
+        ANGLE_WINDOW_HEIGHT_MAX,
+    ))
     pts = np.asarray(gota_pts, dtype=float)
-    mask = (pts[:, 1] < baseline_ajustada - 3.0) & (pts[:, 1] > baseline_ajustada - 150.0)
+    mask = (pts[:, 1] <= baseline_ajustada) & (pts[:, 1] > baseline_ajustada - window_height)
     local_pts = pts[mask]
     center_x = (float(p_esq[0]) + float(p_dir[0])) / 2.0
     if lado == "esq":

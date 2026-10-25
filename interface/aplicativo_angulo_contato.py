@@ -1,6 +1,7 @@
 import cv2
 import csv
 import io
+import json
 import numpy as np
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -8,9 +9,11 @@ from tkinter import messagebox
 import os
 import logging
 from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+from parametros import obter
 from processamento_imagem import contorno
 from linha_base import linha_base
 from Cal_angulo import angulo_contato
@@ -35,9 +38,10 @@ def _make_comparison_images(
     left_angle,
     right_angle,
     smoothing_applied,
+    smoothing_kernel,
 ):
     gray = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
-    smoothed = cv2.GaussianBlur(gray, (5, 5), 0) if smoothing_applied else gray
+    smoothed = cv2.GaussianBlur(gray, smoothing_kernel, 0) if smoothing_applied else gray
 
     mask_rgb = cv2.cvtColor(bin_image, cv2.COLOR_GRAY2RGB)
     raw_rgb = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB)
@@ -72,15 +76,23 @@ def _make_comparison_images(
             cv2.circle(contour_view, point, 5, (255, 255, 0), -1)
             cv2.circle(result_view, point, 5, (255, 0, 0), -1)
 
-    for contact, tangent, color in (
-        (left_contact, left_tangent, (0, 100, 255)),
-        (right_contact, right_tangent, (0, 100, 255)),
+    for contact, tangent, lado, color in (
+        (left_contact, left_tangent, "esq", (0, 100, 255)),
+        (right_contact, right_tangent, "dir", (0, 100, 255)),
     ):
         if contact is not None and tangent is not None:
-            vector = np.asarray(tangent, dtype=float).reshape(-1)
-            if vector.size == 2 and np.all(np.isfinite(vector)):
-                start = np.round(np.asarray(contact) - vector * 50).astype(int)
-                end = np.round(np.asarray(contact) + vector * 50).astype(int)
+            segment = desenho.segmento_tangente_exterior(
+                contact,
+                tangent,
+                contour_points,
+                baseline_y,
+                bin_image,
+                50,
+                lado,
+            )
+            if segment is not None:
+                start = np.round(segment[0]).astype(int)
+                end = np.round(segment[1]).astype(int)
                 cv2.line(result_view, tuple(start), tuple(end), color, 2)
 
     for x, angle, label in (
@@ -102,7 +114,7 @@ def _make_comparison_images(
     return {
         "Imagem original (ROI)": raw_rgb,
         (
-            "Suavização (cinza, Gaussian 5x5)"
+            f"Suavização (cinza, Gaussian {smoothing_kernel[0]}x{smoothing_kernel[1]})"
             if smoothing_applied else "Tons de cinza (fallback sem suavização)"
         ): smoothed,
         "Máscara + contorno + linha de base": contour_view,
@@ -111,6 +123,9 @@ def _make_comparison_images(
 
 
 class ContactAngleApp(ctk.CTkToplevel):
+    SURFACE_BASELINE_CORRECTION_MIN_DIFF_PX = float(
+        obter("surface_baseline_correction_min_diff_px", 10.0)
+    )
 
 
     def __init__(
@@ -126,6 +141,7 @@ class ContactAngleApp(ctk.CTkToplevel):
         super().__init__(master=master)
         self.title("Ângulo de Contato")
         self.geometry("1100x700")
+        self.minsize(760, 520)
         # iniciar maximizada (mant�m o bot�o X vis�vel)
         try:
             self.state("zoomed")
@@ -206,48 +222,80 @@ class ContactAngleApp(ctk.CTkToplevel):
 
 
     def setup_ui(self):
+        self.grid_columnconfigure(0, weight=0, minsize=240)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-
-        self.sidebar = ctk.CTkScrollableFrame(self, width=300)
+        self._sidebar_width = 300
+        self.sidebar = ctk.CTkScrollableFrame(self, width=self._sidebar_width, corner_radius=12)
         self.sidebar.grid(row=0, column=0, sticky="ns", padx=10, pady=10)
 
+        ctk.CTkLabel(
+            self.sidebar,
+            text="RESULTADO DA MEDIÇÃO",
+            font=("Arial", 16, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(14, 4))
+        ctk.CTkLabel(
+            self.sidebar,
+            text="Ângulos de contato",
+            text_color="#aeb8c4",
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(0, 6))
 
-        self.res_e = self.res_box("Ângulo Esq.")
-        self.res_d = self.res_box("Ângulo Dir.")
+        self.res_e = self.res_box("Ângulo esquerdo")
+        self.res_d = self.res_box("Ângulo direito")
         self.res_m = self.res_box("Média", True)
 
-        ctk.CTkLabel(self.sidebar, text="Identificação da medição").pack(pady=(8, 2))
+        ctk.CTkLabel(
+            self.sidebar,
+            text="IDENTIFICAÇÃO E RASTREABILIDADE",
+            font=("Arial", 13, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(14, 5))
         self.sample_entry = ctk.CTkEntry(self.sidebar, placeholder_text="Amostra / identificação")
-        self.sample_entry.pack(fill="x", padx=20, pady=3)
+        self.sample_entry.pack(fill="x", padx=16, pady=4)
         self.notes_entry = ctk.CTkEntry(self.sidebar, placeholder_text="Observações (opcional)")
-        self.notes_entry.pack(fill="x", padx=20, pady=3)
+        self.notes_entry.pack(fill="x", padx=16, pady=4)
         self.sample_entry.bind("<KeyRelease>", self._measurement_fields_changed)
         self.notes_entry.bind("<KeyRelease>", self._measurement_fields_changed)
 
-        ctk.CTkLabel(self.sidebar, text="Resumo da medição").pack(pady=(8, 2))
-        self.measurement_summary = ctk.CTkTextbox(self.sidebar, height=150, wrap="word")
-        self.measurement_summary.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkLabel(
+            self.sidebar,
+            text="Resumo copiável",
+            font=("Arial", 13, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(12, 4))
+        self.measurement_summary = ctk.CTkTextbox(self.sidebar, height=140, wrap="word")
+        self.measurement_summary.pack(fill="x", padx=12, pady=(0, 6))
         self.measurement_summary.configure(state="disabled")
         ctk.CTkButton(
             self.sidebar, text="Copiar resumo", command=self.copy_measurement_summary
-        ).pack(fill="x", padx=20, pady=3)
+        ).pack(fill="x", padx=16, pady=4)
         ctk.CTkButton(
-            self.sidebar, text="Copiar linha para planilha", command=self.copy_measurement_row
-        ).pack(fill="x", padx=20, pady=3)
+            self.sidebar,
+            text="Copiar linha para planilha",
+            command=self.copy_measurement_row,
+        ).pack(fill="x", padx=16, pady=4)
         self.history_button = ctk.CTkButton(
-            self.sidebar, text="Histórico da sessão (0)", command=self.show_measurement_history
+            self.sidebar,
+            text=f"Histórico ({len(self.measurement_history)})",
+            command=self.show_measurement_history,
         )
-        self.history_button.pack(fill="x", padx=20, pady=3)
+        self.history_button.pack(fill="x", padx=16, pady=4)
         ctk.CTkButton(
             self.sidebar,
             text="Comparar etapas da imagem",
             command=self.show_image_comparison,
-        ).pack(fill="x", padx=20, pady=3)
+        ).pack(fill="x", padx=16, pady=4)
 
-        # Bot�o para iniciar novo teste (voltar � sele��o)
-        ctk.CTkButton(self.sidebar, text="Novo Teste", fg_color="#a52a2a", command=self._novo_teste).pack(fill="x", padx=20, pady=(10,0))
+        ctk.CTkButton(
+            self.sidebar,
+            text="Novo teste",
+            fg_color="#8f3434",
+            hover_color="#702929",
+            command=self._novo_teste,
+        ).pack(fill="x", padx=16, pady=(14, 16))
 
 
         self.canvas = ctk.CTkCanvas(self, bg="#121212")
@@ -261,7 +309,7 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.canvas.bind("<Button-3>", self.on_pan_start)
         self.canvas.bind("<B3-Motion>", self.on_pan_drag)
         self.canvas.bind("<ButtonRelease-3>", self.on_pan_release)
-        self.bind("<Configure>", lambda e: self.render())
+        self.bind("<Configure>", self._on_window_configure)
 
 
         # Estado para arrastar pontos
@@ -282,8 +330,20 @@ class ContactAngleApp(ctk.CTkToplevel):
         def point(value):
             return [round(float(value[0]), 2), round(float(value[1]), 2)] if value is not None else None
 
+        fit_score = self.fit_quality.get("score")
+        fit_rmse = self.fit_quality.get("rmse_px")
+
+        if self.ae_interna is not None and self.ad_interna is not None:
+            status = "Concluída"
+        elif self.ae_interna is not None or self.ad_interna is not None:
+            status = "Resultado parcial"
+        else:
+            status = "Sem resultado válido"
+
         return {
             "timestamp": self.measurement_timestamp,
+            "status": status,
+            "image_sha256": self.measurement_metadata.get("image_sha256", ""),
             "sample": self.sample_entry.get().strip(),
             "notes": self.notes_entry.get().strip(),
             "source_path": self.measurement_metadata.get("source_path", ""),
@@ -309,8 +369,8 @@ class ContactAngleApp(ctk.CTkToplevel):
                 round((float(self.ae_interna) + float(self.ad_interna)) / 2, 2)
                 if self.ae_interna is not None and self.ad_interna is not None else None
             ),
-            "fit_score": round(float(self.fit_quality.get("score", 0.0)) * 100, 2),
-            "fit_rmse_px": round(float(self.fit_quality.get("rmse_px", 0.0)), 3),
+            "fit_score": round(float(fit_score) * 100, 2) if fit_score is not None else None,
+            "fit_rmse_px": round(float(fit_rmse), 3) if fit_rmse is not None else None,
             "fit_points": int(self.fit_quality.get("n_pts", 0)),
             "manual_adjustments": sorted(self.manual_adjustments),
             "calculation_parameters": dict(self.measurement_metadata.get("calculation_parameters", {})),
@@ -331,9 +391,11 @@ class ContactAngleApp(ctk.CTkToplevel):
         params = "\n".join(f"  {key}: {value}" for key, value in record["calculation_parameters"].items())
         return (
             f"Data/hora: {record['timestamp']}\n"
+            f"Status: {record['status']}\n"
             f"Amostra: {record['sample'] or 'Não informada'}\n"
             f"Observações: {record['notes'] or 'Nenhuma'}\n"
             f"Imagem: {record['source_name'] or 'Não informada'}\n"
+            f"SHA-256 dos pixels da imagem: {record['image_sha256'] or 'Não informado'}\n"
             f"Origem: {record['acquisition_mode']}\n"
             f"Caminho: {record['source_path'] or 'Não informado'}\n"
             f"Dimensão original: {record['image_size'] or 'Não informada'}\n"
@@ -351,7 +413,8 @@ class ContactAngleApp(ctk.CTkToplevel):
             f"Contato: {record['contact_method']}\n"
             f"Ponto esquerdo (x, y): {record['left_contact_px'] or 'Não detectado'}\n"
             f"Ponto direito (x, y): {record['right_contact_px'] or 'Não detectado'}\n"
-            f"Ajuste do contorno: score={record['fit_score']}%, RMSE={record['fit_rmse_px']} px, "
+            f"Ajuste do contorno: score={self._format_measurement_value(record['fit_score'], '%')}, "
+            f"RMSE={self._format_measurement_value(record['fit_rmse_px'], ' px')}, "
             f"pontos={record['fit_points']}\n"
             f"Ajustes do pesquisador: {adjustments}\n"
             f"Parâmetros do cálculo:\n{params or '  Padrões internos do algoritmo'}"
@@ -361,7 +424,8 @@ class ContactAngleApp(ctk.CTkToplevel):
     @staticmethod
     def _measurement_csv_row(record):
         return [
-            record["timestamp"], record["sample"], record["notes"], record["source_name"],
+            record["timestamp"], record["status"], record["sample"], record["notes"], record["source_name"],
+            record["image_sha256"],
             record["source_path"], record["acquisition_mode"], record["image_size"],
             record["analysis_size"], str(record["roi"]), record["filter_mode"],
             record["mask_source"], record["mask_quality"], "; ".join(record["risk_flags"]),
@@ -371,20 +435,21 @@ class ContactAngleApp(ctk.CTkToplevel):
             str(record["left_contact_px"]), str(record["right_contact_px"]),
             record["contact_method"], record["fit_score"], record["fit_rmse_px"],
             record["fit_points"], "; ".join(record["manual_adjustments"]),
+            json.dumps(record["calculation_parameters"], ensure_ascii=False, sort_keys=True),
         ]
 
 
     @staticmethod
     def _measurement_csv_text(records):
         headers = [
-            "data_hora", "amostra", "observacoes", "imagem", "caminho_imagem",
+            "data_hora", "status", "amostra", "observacoes", "imagem", "sha256_imagem", "caminho_imagem",
             "origem", "dimensao_original", "dimensao_analisada", "roi_px", "filtro",
             "mascara", "qualidade_mascara_pct", "riscos_contorno",
             "angulo_interno_esq_deg", "angulo_externo_esq_deg",
             "angulo_interno_dir_deg", "angulo_externo_dir_deg", "media_interna_deg",
             "metodo_linha_base", "linha_base_y_px", "contato_esq_xy_px", "contato_dir_xy_px",
             "metodo_contato", "qualidade_ajuste_pct", "rmse_px", "pontos_ajuste",
-            "ajustes_pesquisador",
+            "ajustes_pesquisador", "parametros_calculo_json",
         ]
         output = io.StringIO()
         writer = csv.writer(output, delimiter="\t", lineterminator="\n")
@@ -405,7 +470,9 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.measurement_summary.delete("1.0", "end")
         self.measurement_summary.insert("1.0", self._measurement_summary_text(self.measurement_record))
         self.measurement_summary.configure(state="disabled")
-        self.history_button.configure(text=f"Histórico da sessão ({len(self.measurement_history)})")
+        self.history_button.configure(text=f"Histórico ({len(self.measurement_history)})")
+        if self.master is not None and hasattr(self.master, "_schedule_history_save"):
+            self.master._schedule_history_save()
 
 
     def _copy_to_clipboard(self, text):
@@ -428,9 +495,96 @@ class ContactAngleApp(ctk.CTkToplevel):
             self._copy_to_clipboard(self._measurement_csv_text([self.measurement_record]))
 
 
+    @staticmethod
+    def _measurement_history_path():
+        app_data = os.environ.get("APPDATA")
+        data_dir = Path(app_data) / "Angle" if app_data else Path.home() / ".angle"
+        return data_dir / "historico_medicoes.json"
+
+
+    @classmethod
+    def load_measurement_history(cls):
+        history_path = cls._measurement_history_path()
+        if not history_path.exists():
+            return []
+        try:
+            data = json.loads(history_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.error("Não foi possível carregar o histórico %s: %s", history_path, exc)
+            return []
+        if not isinstance(data, list):
+            logger.error("Formato inválido no histórico de medições: %s", history_path)
+            return []
+        required_fields = {
+            "timestamp", "status", "image_sha256", "sample", "notes", "source_name",
+            "source_path", "acquisition_mode", "image_size", "analysis_size", "roi",
+            "filter_mode", "mask_source", "mask_quality", "risk_flags",
+            "baseline_method", "contact_method", "baseline_y_px", "left_contact_px",
+            "right_contact_px", "left_internal_deg", "left_external_deg",
+            "right_internal_deg", "right_external_deg", "mean_internal_deg",
+            "fit_score", "fit_rmse_px", "fit_points", "manual_adjustments",
+            "calculation_parameters",
+        }
+        valid_records = [
+            item for item in data
+            if isinstance(item, dict) and required_fields.issubset(item)
+        ]
+        if len(valid_records) != len(data):
+            logger.warning("Registros inválidos ignorados no histórico %s", history_path)
+        return valid_records
+
+
+    @classmethod
+    def save_measurement_history(cls, history):
+        history_path = cls._measurement_history_path()
+        if not history and not history_path.exists():
+            return
+        temporary_path = history_path.with_suffix(".tmp")
+        try:
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path.write_text(
+                json.dumps(history, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temporary_path.replace(history_path)
+        except OSError:
+            logger.error("Não foi possível salvar o histórico %s", history_path, exc_info=True)
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Não foi possível remover arquivo temporário %s", temporary_path, exc_info=True)
+            raise
+
+
+    def _history_changed(self):
+        self.history_button.configure(
+            text=f"Histórico ({len(self.measurement_history)})"
+        )
+        if self.master is not None and hasattr(self.master, "_schedule_history_save"):
+            self.master._schedule_history_save()
+
+
+    def _delete_measurement_record(self, record):
+        record_index = next(
+            (index for index, item in enumerate(self.measurement_history) if item is record),
+            None,
+        )
+        if record_index is None:
+            return False
+
+        del self.measurement_history[record_index]
+        self._history_changed()
+        return True
+
+
+    def _clear_measurement_history(self):
+        self.measurement_history.clear()
+        self._history_changed()
+
+
     def show_measurement_history(self):
         window = ctk.CTkToplevel(self)
-        window.title("Histórico de medições da sessão")
+        window.title("Histórico de medições")
         window.geometry("900x600")
         window.transient(self)
         window.grid_columnconfigure(1, weight=1)
@@ -441,23 +595,91 @@ class ContactAngleApp(ctk.CTkToplevel):
         details = ctk.CTkTextbox(window, wrap="word")
         details.grid(row=0, column=1, sticky="nsew", padx=(0, 10), pady=10)
 
+        selected_record = None
+
         def show_record(record):
+            nonlocal selected_record
+            selected_record = record
             details.configure(state="normal")
             details.delete("1.0", "end")
             details.insert("1.0", self._measurement_summary_text(record))
             details.configure(state="disabled")
 
-        for index, record in reversed(list(enumerate(self.measurement_history, start=1))):
-            title = record["sample"] or record["source_name"] or f"Medição {index}"
-            ctk.CTkButton(
-                records_frame,
-                text=f"{index}. {title}\n{record['timestamp']}",
-                anchor="w",
-                command=lambda item=record: show_record(item),
-            ).pack(fill="x", padx=4, pady=3)
+        def show_empty_details():
+            nonlocal selected_record
+            selected_record = None
+            details.configure(state="normal")
+            details.delete("1.0", "end")
+            details.insert("1.0", "Nenhuma medição foi registrada.")
+            details.configure(state="disabled")
+
+        def render_records(preferred_record=None):
+            for child in records_frame.winfo_children():
+                child.destroy()
+
+            if not self.measurement_history:
+                show_empty_details()
+                return
+
+            if not any(record is preferred_record for record in self.measurement_history):
+                preferred_record = self.measurement_history[-1]
+            show_record(preferred_record)
+
+            for index, record in reversed(list(enumerate(self.measurement_history, start=1))):
+                title = record["sample"] or record["source_name"] or f"Medição {index}"
+                row = ctk.CTkFrame(records_frame, fg_color="transparent")
+                row.pack(fill="x", padx=4, pady=3)
+                row.grid_columnconfigure(0, weight=1)
+                ctk.CTkButton(
+                    row,
+                    text=f"{index}. {title}\n{record['timestamp']}",
+                    anchor="w",
+                    command=lambda item=record: show_record(item),
+                ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+                ctk.CTkButton(
+                    row,
+                    text="Excluir",
+                    width=64,
+                    fg_color="#8f3434",
+                    hover_color="#702929",
+                    command=lambda item=record: delete_record(item),
+                ).grid(row=0, column=1, sticky="e")
+
+        def delete_record(record):
+            title = record["sample"] or record["source_name"] or "esta medição"
+            if not messagebox.askyesno(
+                "Excluir medição",
+                f"Deseja excluir '{title}' do histórico salvo?",
+                parent=window,
+            ):
+                return
+            was_selected = selected_record is record
+            if self._delete_measurement_record(record):
+                render_records(None if was_selected else selected_record)
+
+        def clear_history():
+            if not self.measurement_history:
+                return
+            if not messagebox.askyesno(
+                "Limpar histórico",
+                f"Excluir permanentemente todas as {len(self.measurement_history)} medições salvas?",
+                parent=window,
+            ):
+                return
+            self._clear_measurement_history()
+            render_records()
+
+        render_records()
 
         actions = ctk.CTkFrame(window)
         actions.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
+        ctk.CTkButton(
+            actions,
+            text="Limpar todo o histórico",
+            fg_color="#8f3434",
+            hover_color="#702929",
+            command=clear_history,
+        ).pack(side="left", padx=5, pady=5)
         ctk.CTkButton(
             actions,
             text="Copiar histórico para planilha",
@@ -465,19 +687,13 @@ class ContactAngleApp(ctk.CTkToplevel):
         ).pack(side="left", padx=5, pady=5)
         ctk.CTkButton(actions, text="Fechar", command=window.destroy).pack(side="right", padx=5, pady=5)
 
-        if self.measurement_history:
-            show_record(self.measurement_history[-1])
-        else:
-            details.insert("1.0", "Nenhuma medição foi registrada nesta sessão.")
-            details.configure(state="disabled")
-
-
     def show_image_comparison(self):
         if self.raw_image is None or self.bin_image is None:
             messagebox.showerror("Comparação indisponível", "A imagem original ou a máscara não está disponível.")
             return
 
         smoothing_applied = self.measurement_metadata.get("mask_source") != "FALLBACK_OTSU"
+        smoothing_kernel = tuple(self.measurement_metadata.get("smoothing_kernel", (5, 5)))
         panels = _make_comparison_images(
             self.raw_image,
             self.bin_image,
@@ -491,6 +707,7 @@ class ContactAngleApp(ctk.CTkToplevel):
             self.ae_interna,
             self.ad_interna,
             smoothing_applied,
+            smoothing_kernel,
         )
 
         window = ctk.CTkToplevel(self)
@@ -538,13 +755,35 @@ class ContactAngleApp(ctk.CTkToplevel):
     def res_box(self, label, highlight=False):
         f = ctk.CTkFrame(
             self.sidebar,
-            fg_color="#1f6aa5" if highlight else "#2b2b2b"
+            fg_color="#164e78" if highlight else "#252a31",
+            corner_radius=10,
         )
-        f.pack(fill="x", padx=20, pady=10)
-        ctk.CTkLabel(f, text=label).pack()
-        v = ctk.CTkLabel(f, text="0.00°", font=("Arial", 26, "bold"))
-        v.pack()
+        f.pack(fill="x", padx=14, pady=5)
+        ctk.CTkLabel(
+            f,
+            text=label,
+            text_color="#c4ccd5",
+            font=("Arial", 12),
+        ).pack(anchor="w", padx=12, pady=(8, 0))
+        v = ctk.CTkLabel(
+            f,
+            text="—",
+            font=("Arial", 25 if highlight else 19, "bold"),
+            justify="left",
+            anchor="w",
+        )
+        v.pack(fill="x", anchor="w", padx=12, pady=(0, 8))
         return v
+
+
+    def _on_window_configure(self, event):
+        if event.widget is not self:
+            return
+        sidebar_width = max(240, min(360, int(event.width * 0.28)))
+        if sidebar_width != self._sidebar_width:
+            self._sidebar_width = sidebar_width
+            self.sidebar.configure(width=sidebar_width)
+        self.render()
     # ---------------- AN�LISE ----------------
     def initial_analysis(self):
         """
@@ -558,6 +797,7 @@ class ContactAngleApp(ctk.CTkToplevel):
             self.gota_pts = contorno.encontrar_contorno_gota_robusto(self.bin_image)
         if self.gota_pts is None:
             messagebox.showerror("Erro", "Não foi possível detectar a silhueta da gota.")
+            self.calculate()
             return
 
 
@@ -650,7 +890,7 @@ class ContactAngleApp(ctk.CTkToplevel):
             # S� substitui a baseline quando a transi��o da imagem diverge
             # claramente do piso detectado no contorno. Pequenas diferen�as
             # s�o espessura/ru�do da linha e devem preservar o comportamento-base.
-            if abs(chao_real - baseline_detectada) > 10.0:
+            if abs(chao_real - baseline_detectada) > self.SURFACE_BASELINE_CORRECTION_MIN_DIFF_PX:
                 self.baseline_y = chao_real
                 p_esq, p_dir = linha_base.find_contact_points_by_extrapolation(
                     self.gota_pts, self.baseline_y
@@ -673,17 +913,11 @@ class ContactAngleApp(ctk.CTkToplevel):
         )
         if not self.validacao_perfil["valida"]:
             messagebox.showerror("Geometria inválida", "O perfil líquido-ar não pôde ser separado do fechamento Binary.")
+            self.perfil_liquido_ar = None
+            self.calculate()
             return
 
         logger.info("An�lise conclu�da via: %s", self.contact_method)
-
-        fit_q = angulo_contato.calcular_qualidade_dinamica(
-            self.perfil_liquido_ar, self.p_esq, self.p_dir, self.baseline_y
-        )
-        self.fit_quality = fit_q
-        q_pct = int(100 * float(fit_q.get("score", 0.0)))
-        rmse = float(fit_q.get("rmse_px", 0.0))
-        logger.info("[QUALIDADE AJUSTE] Score=%s%% | RMSE=%.3fpx", q_pct, rmse)
 
         self.calculate()
 
@@ -826,6 +1060,30 @@ class ContactAngleApp(ctk.CTkToplevel):
         self.render()
 
     def calculate(self):
+        self.tangent_left = None
+        self.tangent_right = None
+        if self.gota_pts is not None and self.p_esq is not None and self.p_dir is not None:
+            quality_points = self.perfil_liquido_ar if self.perfil_liquido_ar is not None else self.gota_pts
+            fit_quality = angulo_contato.calcular_qualidade_dinamica(
+                quality_points, self.p_esq, self.p_dir, self.baseline_y
+            )
+            fit_rmse = fit_quality.get("rmse_px")
+            if fit_quality.get("n_pts", 0.0) > 0 and fit_rmse is not None and fit_rmse < 999.0:
+                self.fit_quality = fit_quality
+                logger.debug(
+                    "[QUALIDADE AJUSTE] Score=%.1f%% | RMSE=%.3fpx",
+                    100 * float(fit_quality["score"]),
+                    float(fit_rmse),
+                )
+            else:
+                self.fit_quality = {
+                    "score": None,
+                    "rmse_px": None,
+                    "n_pts": int(fit_quality.get("n_pts", 0)),
+                }
+        else:
+            self.fit_quality = {"score": None, "rmse_px": None, "n_pts": 0}
+
         if self.p_esq is None or self.p_dir is None:
             # N�o � poss�vel calcular sem ambos os pontos de contato
             self.ae = None
@@ -981,14 +1239,14 @@ class ContactAngleApp(ctk.CTkToplevel):
             )
 
 
-        if self.p_esq and self.p_dir:
+        if self.p_esq is not None or self.p_dir is not None:
             desenho.desenhar_pontos_contato(
                 self.canvas, self.p_esq, self.p_dir, to_scr
             )
-            # Desenha tangentes somente quando pelo menos um �ngulo for v�lido
-            ae_val = getattr(self, 'ae', None)
-            ad_val = getattr(self, 'ad', None)
-            if ae_val is not None or ad_val is not None:
+            if (
+                getattr(self, "tangent_left", None) is not None
+                or getattr(self, "tangent_right", None) is not None
+            ):
                 try:
                     if hasattr(self, 'tangent_left') and self.tangent_left is not None:
                         desenho.desenhar_tangente_vetor(
@@ -997,6 +1255,10 @@ class ContactAngleApp(ctk.CTkToplevel):
                             self.tangent_left,
                             self.zoom_scale,
                             to_scr,
+                            self.gota_pts,
+                            self.baseline_y,
+                            self.bin_image,
+                            "esq",
                         )
                     if hasattr(self, 'tangent_right') and self.tangent_right is not None:
                         desenho.desenhar_tangente_vetor(
@@ -1005,6 +1267,10 @@ class ContactAngleApp(ctk.CTkToplevel):
                             self.tangent_right,
                             self.zoom_scale,
                             to_scr,
+                            self.gota_pts,
+                            self.baseline_y,
+                            self.bin_image,
+                            "dir",
                         )
                 except Exception:
                     logger.warning("Falha ao desenhar as tangentes", exc_info=True)
@@ -1135,6 +1401,8 @@ class ContactAngleApp(ctk.CTkToplevel):
 
 
     def _on_close(self):
+        if self.master is not None and hasattr(self.master, "_flush_measurement_history"):
+            self.master._flush_measurement_history()
         if self._contorno_highlight_after_id is not None:
             try:
                 self.after_cancel(self._contorno_highlight_after_id)

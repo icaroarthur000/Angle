@@ -1,6 +1,16 @@
 import cv2
 import numpy as np
 
+from parametros import obter
+
+
+def _kernel_configurado(nome: str, padrao: str) -> tuple[int, int]:
+    valor = obter(nome, padrao)
+    partes = valor.split(",") if isinstance(valor, str) else valor
+    if not isinstance(partes, (tuple, list)) or len(partes) != 2:
+        raise ValueError(f"Parâmetro {nome} deve definir duas dimensões de kernel.")
+    return tuple(_garantir_impar(int(parte)) for parte in partes)
+
 
 def preprocessar_imagem_robusto(imagem):
     """Melhora contraste local e reduz sensibilidade a iluminação irregular."""
@@ -20,9 +30,22 @@ def _garantir_impar(valor: int, minimo: int = 3) -> int:
     return valor if valor % 2 == 1 else valor + 1
 
 
-def aplicar_filtro_binary_otsu(imagem, blur_kernel=(5, 5), morph_kernel=(5, 5), morph_iterations=1):
+OTSU_BLUR_KERNEL = _kernel_configurado("otsu_blur_kernel", "5,5")
+OTSU_MORPH_KERNEL = _kernel_configurado("otsu_morph_kernel", "5,5")
+OTSU_MORPH_ITERATIONS = int(obter("otsu_morph_iterations", 1))
+CANNY_BLUR_KERNEL = _kernel_configurado("canny_blur_kernel", "5,5")
+CANNY_THRESHOLD_LOW = int(obter("canny_threshold_low", 30))
+CANNY_THRESHOLD_HIGH = int(obter("canny_threshold_high", 100))
+CANNY_CLOSE_KERNEL = _kernel_configurado("canny_close_kernel", "3,3")
+CANNY_CLOSE_ITERATIONS = int(obter("canny_close_iterations", 2))
+
+
+def aplicar_filtro_binary_otsu(imagem, blur_kernel=None, morph_kernel=None, morph_iterations=None):
     """Binarização OTSU com fechamento morfológico."""
     gray = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
+    blur_kernel = OTSU_BLUR_KERNEL if blur_kernel is None else blur_kernel
+    morph_kernel = OTSU_MORPH_KERNEL if morph_kernel is None else morph_kernel
+    morph_iterations = OTSU_MORPH_ITERATIONS if morph_iterations is None else morph_iterations
     kx = _garantir_impar(blur_kernel[0])
     ky = _garantir_impar(blur_kernel[1])
     blur = cv2.GaussianBlur(gray, (kx, ky), 0)
@@ -35,8 +58,8 @@ def aplicar_filtro_binary_otsu(imagem, blur_kernel=(5, 5), morph_kernel=(5, 5), 
 def aplicar_filtro_edges_canny(imagem):
     """Detecção de bordas por Canny."""
     gray = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blur, 30, 100)
+    blur = cv2.GaussianBlur(gray, CANNY_BLUR_KERNEL, 0)
+    edges = cv2.Canny(blur, CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH)
     return gray, edges
 
 

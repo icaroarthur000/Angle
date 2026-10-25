@@ -1,5 +1,7 @@
 import math
 import logging
+import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -114,17 +116,99 @@ def desenhar_tangentes(canvas, p_esq, p_dir, ae, ad, zoom_scale, to_scr):
     except (TypeError, ValueError, AttributeError) as e:
         logger.warning("Erro na renderização das tangentes: %s", e)
 
-def desenhar_tangente_vetor(canvas, p_contato, vetor, zoom_scale, to_scr):
-    """Desenha a tangente diretamente a partir do vetor calculado."""
+def segmento_tangente_exterior(
+    p_contato,
+    vetor,
+    contour_pts,
+    baseline_y,
+    binary_mask,
+    length,
+    lado="esq",
+):
+    """Return the upper-facing tangent ray, clipped before it enters the drop mask."""
+    if p_contato is None or vetor is None or contour_pts is None or binary_mask is None:
+        return None
+    if len(p_contato) != 2 or len(contour_pts) < 3 or length <= 0 or lado not in ("esq", "dir"):
+        return None
+
+    contact = tuple(float(value) for value in p_contato)
+    direction = np.asarray(vetor, dtype=float).reshape(-1).copy()
+    if direction.size != 2 or not np.all(np.isfinite(direction)):
+        return None
+    norm = float(np.linalg.norm(direction))
+    if norm < 1e-9:
+        return None
+    direction /= norm
+
+    if baseline_y is None:
+        return None
+    if abs(direction[1]) <= 1e-6:
+        if (lado == "esq" and direction[0] > 0) or (lado == "dir" and direction[0] < 0):
+            direction *= -1
+    elif direction[1] > 0:
+        direction *= -1
+    upper_ray = direction
+
+    mask = np.asarray(binary_mask)
+    if mask.ndim == 3:
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    height, width = mask.shape[:2]
+    interior_mask = cv2.erode(mask, np.ones((3, 3), dtype=np.uint8), iterations=1)
+
+    end_distance = float(length)
+    step = 0.5
+    for distance in np.arange(2.0, end_distance + step, step):
+        x = int(round(contact[0] + upper_ray[0] * distance))
+        y = int(round(contact[1] + upper_ray[1] * distance))
+        if x < 0 or x >= width or y < 0 or y >= height:
+            end_distance = max(0.0, distance - step)
+            break
+        if interior_mask[y, x] > 0:
+            end_distance = max(0.0, distance - step)
+            break
+
+    if end_distance < 2.0:
+        logger.debug(
+            "Tangente omitida: ajuste entra na máscara antes de formar um segmento visível "
+            "(contato=%s, vetor=%s).",
+            contact,
+            direction.tolist(),
+        )
+        return None
+    end = np.asarray(contact) + upper_ray * end_distance
+    return contact, (float(end[0]), float(end[1]))
+
+
+def desenhar_tangente_vetor(
+    canvas,
+    p_contato,
+    vetor,
+    zoom_scale,
+    to_scr,
+    contour_pts=None,
+    baseline_y=None,
+    binary_mask=None,
+    lado="esq",
+):
+    """Draw only the outward-facing portion of the fitted tangent."""
     if p_contato is None or vetor is None or len(p_contato) != 2:
         return
     try:
         escala = zoom_scale if zoom_scale and zoom_scale > 0 else 1.0
         length = 50 / escala
-        x, y = p_contato
-        vx, vy = vetor
-        x1, y1 = to_scr(x - vx * length, y - vy * length)
-        x2, y2 = to_scr(x + vx * length, y + vy * length)
+        segment = segmento_tangente_exterior(
+            p_contato,
+            vetor,
+            contour_pts,
+            baseline_y,
+            binary_mask,
+            length,
+            lado,
+        )
+        if segment is None:
+            return
+        x1, y1 = to_scr(*segment[0])
+        x2, y2 = to_scr(*segment[1])
         canvas.create_line(x1, y1, x2, y2, fill="blue", width=2, tags="tangent_vector")
     except (TypeError, ValueError, AttributeError) as e:
         logger.warning("Erro na renderização da tangente vetorial: %s", e)

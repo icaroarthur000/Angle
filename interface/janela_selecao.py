@@ -1,4 +1,5 @@
 import cv2
+import hashlib
 import numpy as np
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -10,6 +11,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 from Cal_angulo import angulo_contato
+from parametros import carregar_parametros
 from processamento_imagem import filtros, contorno
 from interface.aplicativo_angulo_contato import ContactAngleApp
 
@@ -58,6 +60,7 @@ class SelectionWindow(ctk.CTk):
         super().__init__()
         self.title(" Seleção da Gota")
         self.geometry("1100x700")
+        self.minsize(800, 540)
         # iniciar maximizada (mantém o botão X visível)
         try:
             self.state("zoomed")
@@ -70,7 +73,8 @@ class SelectionWindow(ctk.CTk):
         self.camera_running = False
         self.image_source_path = ""
         self.acquisition_mode = "Não informado"
-        self.measurement_history = []
+        self.measurement_history = ContactAngleApp.load_measurement_history()
+        self._history_save_after_id = None
 
 
         self.roi_start = None
@@ -97,22 +101,58 @@ class SelectionWindow(ctk.CTk):
         self.grid_rowconfigure(1, weight=1)
 
 
-        top = ctk.CTkFrame(self)
-        top.grid(row=0, column=0, sticky="ew", padx=20, pady=10)
+        top = ctk.CTkFrame(self, corner_radius=12)
+        top.grid(row=0, column=0, sticky="ew", padx=20, pady=(14, 10))
+        top.grid_columnconfigure(0, weight=1)
 
+        ctk.CTkLabel(
+            top,
+            text="1. Imagem e região  ›  2. Processamento  ›  3. Análise",
+            font=("Arial", 16, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 8))
 
-        ctk.CTkButton(top, text="Abrir Arquivo",
-                      command=self.load_from_file).pack(side="left", padx=10)
+        ctk.CTkLabel(
+            top,
+            text="Abra uma imagem ou use a câmera; depois arraste sobre a gota para selecionar a região.",
+            text_color="#aeb8c4",
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
 
+        toolbar = ctk.CTkFrame(top, fg_color="transparent")
+        toolbar.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self._toolbar = toolbar
+        toolbar.grid_columnconfigure(1, weight=1)
+        source_actions = ctk.CTkFrame(toolbar, fg_color="transparent")
+        source_actions.grid(row=0, column=0, sticky="w")
+        self._source_actions = source_actions
+        filter_actions = ctk.CTkFrame(toolbar, fg_color="transparent")
+        filter_actions.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self._filter_actions = filter_actions
+        filter_actions.grid_columnconfigure(2, weight=1)
 
-        ctk.CTkButton(top, text="Câmera ON/OFF",
-                      command=self.toggle_camera).pack(side="left", padx=10)
+        ctk.CTkButton(
+            source_actions,
+            text="Abrir imagem",
+            width=125,
+            command=self.load_from_file,
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            source_actions,
+            text="Câmera",
+            width=100,
+            command=self.toggle_camera,
+        ).pack(side="left", padx=4)
 
 
         # Botão de Capturar (aparece apenas quando câmera está ligada)
         self.btn_capture = ctk.CTkButton(
-            top, text="Capturar",
+            source_actions,
+            text="Capturar",
+            width=100,
             fg_color="#4CAF50",
+            hover_color="#388e3c",
             command=self.capture_image
         )
         # Não adiciona ao layout inicialmente (será feito quando câmera ligar)
@@ -120,64 +160,61 @@ class SelectionWindow(ctk.CTk):
 
 
         # ===== BOTÕES DE FILTRO =====
-        sep = ctk.CTkLabel(top, text="|", text_color="#555555", font=("Arial", 18))
-        sep.pack(side="left", padx=8)
-
-
         self.btn_filter_otsu = ctk.CTkButton(
-            top, text="⬛ Binary",
-            width=110,
+            filter_actions, text="Binária",
+            width=95,
             fg_color="#2b2b2b",
             hover_color="#404040",
             border_width=2,
             border_color="#555555",
             command=lambda: self.toggle_filter("OTSU")
         )
-        self.btn_filter_otsu.pack(side="left", padx=4)
+        self.btn_filter_otsu.grid(row=0, column=0, padx=3)
 
 
         self.btn_filter_canny = ctk.CTkButton(
-            top, text="🔲 Edges",
-            width=110,
+            filter_actions, text="Contornos",
+            width=100,
             fg_color="#2b2b2b",
             hover_color="#404040",
             border_width=2,
             border_color="#555555",
             command=lambda: self.toggle_filter("CANNY")
         )
-        self.btn_filter_canny.pack(side="left", padx=4)
+        self.btn_filter_canny.grid(row=0, column=1, padx=3)
 
 
         # Label que mostra o modo atual (Auto / Binary / Edges / Ambos)
         self.lbl_filter_mode = ctk.CTkLabel(
-            top, text=" Auto",
+            filter_actions, text="Auto",
             text_color="#aaaaaa",
             font=("Arial", 11)
         )
-        self.lbl_filter_mode.pack(side="left", padx=6)
-
-
-        sep2 = ctk.CTkLabel(top, text="|", text_color="#555555", font=("Arial", 18))
-        sep2.pack(side="left", padx=8)
-
+        self.lbl_filter_mode.grid(row=0, column=2, sticky="w", padx=8)
 
         self.btn_next = ctk.CTkButton(
-            top, text="Analisar Seleção →",
-            fg_color="green",
+            toolbar, text="Analisar seleção  →",
+            width=175,
+            height=38,
+            fg_color="#18794e",
+            hover_color="#146640",
             command=self.confirm_and_analyze,
             state="disabled"
         )
-        self.btn_next.pack(side="right", padx=10)
+        self.btn_next.grid(row=0, column=2, sticky="e", padx=(8, 4))
 
 
         self.display_frame = ctk.CTkFrame(self, fg_color="#121212")
         self.display_frame.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
 
+        self._toolbar_compact = None
+        toolbar.bind("<Configure>", self._adapt_toolbar)
 
         self.canvas = ctk.CTkCanvas(
             self.display_frame, bg="#121212", highlightthickness=0
         )
         self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Configure>", lambda _event: self.render_frame())
 
 
         self.canvas.bind("<Button-1>", self.start_roi)
@@ -187,6 +224,27 @@ class SelectionWindow(ctk.CTk):
 
         # handler de fechamento
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+
+    def _adapt_toolbar(self, event):
+        if event.widget is not self._toolbar:
+            return
+        compact = event.width < 820
+        if compact == self._toolbar_compact:
+            return
+        self._toolbar_compact = compact
+
+        if compact:
+            self._toolbar.grid_rowconfigure(0, weight=0)
+            self._toolbar.grid_rowconfigure(1, weight=0)
+            self._source_actions.grid(row=0, column=0, columnspan=3, sticky="w")
+            self._filter_actions.grid(row=1, column=0, columnspan=2, sticky="w", padx=(0, 8))
+            self.btn_next.grid(row=1, column=2, sticky="e", padx=(8, 4))
+        else:
+            self._toolbar.grid_rowconfigure(1, weight=0)
+            self._source_actions.grid(row=0, column=0, sticky="w")
+            self._filter_actions.grid(row=0, column=1, sticky="w", padx=(8, 0))
+            self.btn_next.grid(row=0, column=2, sticky="e", padx=(8, 4))
 
 
     # ===== Gerenciamento de Filtro =====
@@ -296,8 +354,13 @@ class SelectionWindow(ctk.CTk):
                     "risk_flags": q.get("risk_flags", []),
                 }
             elif use_canny and not use_otsu:
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                bin_canny_filled = cv2.morphologyEx(bin_canny, cv2.MORPH_CLOSE, kernel, iterations=2)
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, filtros.CANNY_CLOSE_KERNEL)
+                bin_canny_filled = cv2.morphologyEx(
+                    bin_canny,
+                    cv2.MORPH_CLOSE,
+                    kernel,
+                    iterations=filtros.CANNY_CLOSE_ITERATIONS,
+                )
                 self.binary_image, pts = contorno.extrair_mascara_gota(bin_canny_filled, img_gray=roi_gray)
                 q = contorno.avaliar_qualidade_contorno(pts, self.binary_image.shape)
                 self.analysis_meta = {
@@ -481,7 +544,7 @@ class SelectionWindow(ctk.CTk):
         self.camera_running = True
         # Mostra o botão de capturar
         if not self.btn_capture_visible:
-            self.btn_capture.pack(side="left", padx=10, after=self.master.winfo_children()[0] if self.master else None)
+            self.btn_capture.pack(side="left", padx=4)
             self.btn_capture_visible = True
         self.update_camera()
 
@@ -567,7 +630,7 @@ class SelectionWindow(ctk.CTk):
             os.makedirs(capture_folder, exist_ok=True)
            
             # Gerar nome do arquivo com timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             filename = f"captura_{timestamp}.jpg"
             filepath = os.path.join(capture_folder, filename)
            
@@ -689,13 +752,37 @@ class SelectionWindow(ctk.CTk):
         r = self.current_roi
         if self.raw_image is None or r is None:
             return
+        if self.acquisition_mode.startswith("Câmera") and not self.image_source_path:
+            try:
+                capture_folder = os.path.join(os.path.expanduser("~"), "Pictures", "capturas_Angle")
+                os.makedirs(capture_folder, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filepath = os.path.join(capture_folder, f"captura_{timestamp}.jpg")
+                saved = cv2.imwrite(filepath, self.raw_image)
+            except (OSError, cv2.error) as exc:
+                messagebox.showerror(
+                    "Erro",
+                    f"Não foi possível arquivar a imagem da câmera. A análise foi cancelada:\n{exc}",
+                )
+                return
+            if not saved:
+                messagebox.showerror(
+                    "Erro",
+                    "Não foi possível salvar a imagem da câmera. A análise foi cancelada para não perder a origem da medição.",
+                )
+                return
+            self.image_source_path = filepath
+            self.acquisition_mode = "Captura automática de câmera"
+
         cropped = self.raw_image[r[1]:r[3], r[0]:r[2]]
         if cropped.size == 0:
             return
 
 
         # === Usar filtro selecionado (já pré-visualizado) ou auto ===
-        modo = "Auto" if not self.active_filters else "/".join(sorted(self.active_filters))
+        modo = "Auto" if not self.active_filters else " + ".join(sorted(self.active_filters))
+        if self.active_filters == {"OTSU", "CANNY"}:
+            modo += " (pipeline automático)"
         logger.info("[ANÁLISE] Modo: %s", modo)
         if self.binary_image is not None:
             # Usa máscara sólida preparada para análise.
@@ -721,12 +808,14 @@ class SelectionWindow(ctk.CTk):
             "source_name": os.path.basename(self.image_source_path) if self.image_source_path else "",
             "acquisition_mode": self.acquisition_mode,
             "image_size": f"{width}x{height} px",
+            "image_sha256": hashlib.sha256(self.raw_image.tobytes()).hexdigest(),
             "roi": roi,
             "filter_mode": modo,
             "mask_source": self.analysis_meta.get("mask_source", "Não informado"),
             "mask_quality": round(100 * float(self.analysis_meta.get("quality_score", 0.0)), 2),
             "risk_flags": list(self.analysis_meta.get("risk_flags", [])),
             "calculation_parameters": {
+                **carregar_parametros(),
                 "offset_baseline_fator": angulo_contato.ANGLE_BASELINE_OFFSET_FACTOR,
                 "offset_baseline_min_px": angulo_contato.ANGLE_BASELINE_OFFSET_MIN,
                 "offset_baseline_max_px": angulo_contato.ANGLE_BASELINE_OFFSET_MAX,
@@ -734,8 +823,29 @@ class SelectionWindow(ctk.CTk):
                 "janela_ajuste_min_px": angulo_contato.ANGLE_WINDOW_HEIGHT_MIN,
                 "janela_ajuste_max_px": angulo_contato.ANGLE_WINDOW_HEIGHT_MAX,
                 "distancia_maxima_contato_px": angulo_contato.ANGLE_CONTACT_CANDIDATE_MAX_DIST,
+                "distancia_vertical_maxima_contato_px": angulo_contato.ANGLE_CONTACT_CANDIDATE_MAX_VERTICAL,
+                "janelas_locais_contato_px": angulo_contato.ANGLE_CONTACT_LOCAL_WINDOW_SIZES,
+                "minimo_pontos_janela_contato": angulo_contato.ANGLE_CONTACT_MIN_WINDOW_POINTS,
+                "r2_minimo_ajuste_tangente": angulo_contato.ANGLE_CONTACT_MIN_R2,
+                "rmse_maximo_ajuste_tangente_px": angulo_contato.ANGLE_CONTACT_MAX_RMSE,
+                "condicionamento_maximo_ajuste_tangente": angulo_contato.ANGLE_CONTACT_MAX_COND,
+                "escala_sigma_outliers": angulo_contato.ANGLE_OUTLIER_SIGMA_SCALE,
                 "rmse_referencia_px": angulo_contato.QUALITY_RMSE_REF_PX,
+                "correcao_baseline_minima_px": ContactAngleApp.SURFACE_BASELINE_CORRECTION_MIN_DIFF_PX,
+                "suavizacao_otsu_kernel_px": filtros.OTSU_BLUR_KERNEL,
+                "morfologia_otsu_kernel_px": filtros.OTSU_MORPH_KERNEL,
+                "morfologia_otsu_iteracoes": filtros.OTSU_MORPH_ITERATIONS,
+                "suavizacao_canny_kernel_px": filtros.CANNY_BLUR_KERNEL,
+                "canny_threshold_inferior": filtros.CANNY_THRESHOLD_LOW,
+                "canny_threshold_superior": filtros.CANNY_THRESHOLD_HIGH,
+                "fechamento_canny_kernel_px": filtros.CANNY_CLOSE_KERNEL,
+                "fechamento_canny_iteracoes": filtros.CANNY_CLOSE_ITERATIONS,
             },
+            "smoothing_kernel": (
+                filtros.CANNY_BLUR_KERNEL
+                if self.analysis_meta.get("mask_source") == "CANNY"
+                else filtros.OTSU_BLUR_KERNEL
+            ),
         }
 
         # sanity checks
@@ -769,6 +879,7 @@ class SelectionWindow(ctk.CTk):
 
     def reset_for_new_test(self):
         """Reseta estado completo para permitir nova medição."""
+        self._flush_measurement_history()
         self.raw_image = None
         self.image_source_path = ""
         self.acquisition_mode = "Não informado"
@@ -792,8 +903,33 @@ class SelectionWindow(ctk.CTk):
             pass
 
 
+    def _schedule_history_save(self):
+        if self._history_save_after_id is not None:
+            self.after_cancel(self._history_save_after_id)
+        self._history_save_after_id = self.after(700, self._save_measurement_history)
+
+
+    def _save_measurement_history(self):
+        self._history_save_after_id = None
+        try:
+            ContactAngleApp.save_measurement_history(self.measurement_history)
+        except OSError as exc:
+            messagebox.showerror(
+                "Erro ao salvar histórico",
+                f"Não foi possível salvar o histórico de medições:\n{exc}",
+            )
+
+
+    def _flush_measurement_history(self):
+        if self._history_save_after_id is not None:
+            self.after_cancel(self._history_save_after_id)
+            self._history_save_after_id = None
+        self._save_measurement_history()
+
+
     def _on_close(self):
         # parar camera e sair
+        self._flush_measurement_history()
         try:
             self.stop_camera()
         except Exception:

@@ -79,11 +79,15 @@ Bin = CLOSE(Bin, kernel_eliptico 5x5, iter=1)
 
 O usuario pode escolher a mascara Otsu, a mascara de bordas Canny ou manter o modo automatico da interface. O modo automatico atual usa a rota Otsu; a funcao `aplicar_multi_threshold` existe como utilitario de avaliacao de candidatos, mas nao e a rota principal acionada por `interface/janela_selecao.py`.
 
+Os valores 5x5 e uma iteracao descritos acima sao os valores iniciais, agora ajustaveis em `configuracao.json`: `otsu_blur_kernel`, `otsu_morph_kernel` e `otsu_morph_iterations`. A suavizacao Otsu e Canny tambem usa o kernel configurado, e nao um kernel fixo embutido na funcao.
+
 Para Canny, o sistema aplica:
 
 Edges = Canny(GaussianBlur(Gray, (5,5)), 30, 100)
 
 e posteriormente realiza fechamento morfologico eliptico 3x3 com duas iteracoes antes da extracao da mascara.
+
+Esses valores iniciais podem ser ajustados por `canny_blur_kernel`, `canny_threshold_low`, `canny_threshold_high`, `canny_close_kernel` e `canny_close_iterations`. O resumo da medicao registra os parametros efetivos usados em cada analise; mudar esses valores deve ser acompanhado de validacao com imagens representativas, pois pode alterar a segmentacao e os angulos.
 
 ## 3.2 Caminho robusto disponivel: preprocessamento.py
 
@@ -354,6 +358,8 @@ altura_janela = clip(ANGLE_WINDOW_HEIGHT_FACTOR * altura_gota,
 mask = (Y <= Y_base_ajustada) AND (Y > Y_base_ajustada - altura_janela)
 
 Assim, tanto o deslocamento da baseline quanto a altura da janela sao configuraveis em `configuracao.json`.
+
+O limiar usado para corrigir uma divergencia entre a baseline geometrica e a superficie detectada (`surface_baseline_correction_min_diff_px`) tambem e configuravel e fica registrado nos parametros da medicao.
 
 ## 6.3 Selecao por lado
 

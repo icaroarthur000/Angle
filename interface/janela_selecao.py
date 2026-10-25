@@ -9,6 +9,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+from Cal_angulo import angulo_contato
 from processamento_imagem import filtros, contorno
 from interface.aplicativo_angulo_contato import ContactAngleApp
 
@@ -67,6 +68,9 @@ class SelectionWindow(ctk.CTk):
         self.raw_image = None
         self.cap = None
         self.camera_running = False
+        self.image_source_path = ""
+        self.acquisition_mode = "Não informado"
+        self.measurement_history = []
 
 
         self.roi_start = None
@@ -403,6 +407,8 @@ class SelectionWindow(ctk.CTk):
                 messagebox.showerror("Erro", "Não foi possível abrir a imagem selecionada.")
                 return
             self.raw_image = img
+            self.image_source_path = path
+            self.acquisition_mode = "Arquivo"
             self._reset_selection_state()
             self.render_frame()
 
@@ -470,6 +476,8 @@ class SelectionWindow(ctk.CTk):
         if not self.cap.isOpened():
             messagebox.showerror("Erro", f"Não foi possível abrir câmera {camera_id}")
             return
+        self.image_source_path = ""
+        self.acquisition_mode = f"Câmera {camera_id}"
         self.camera_running = True
         # Mostra o botão de capturar
         if not self.btn_capture_visible:
@@ -564,7 +572,11 @@ class SelectionWindow(ctk.CTk):
             filepath = os.path.join(capture_folder, filename)
            
             # Salvar a imagem
-            cv2.imwrite(filepath, self.raw_image)
+            if not cv2.imwrite(filepath, self.raw_image):
+                messagebox.showerror("Erro", "Não foi possível salvar a imagem capturada.")
+                return
+            self.image_source_path = filepath
+            self.acquisition_mode = "Captura de câmera"
            
             # Parar a câmera para congelar a imagem
             self.stop_camera()
@@ -702,6 +714,29 @@ class SelectionWindow(ctk.CTk):
             q = int(100 * float(self.analysis_meta.get("quality_score", 0.0)))
             logger.info("[ANÁLISE] Mascara: %s | Qualidade estimada: %s%%", src, q)
 
+        height, width = self.raw_image.shape[:2]
+        roi = tuple(int(value) for value in r)
+        measurement_metadata = {
+            "source_path": self.image_source_path,
+            "source_name": os.path.basename(self.image_source_path) if self.image_source_path else "",
+            "acquisition_mode": self.acquisition_mode,
+            "image_size": f"{width}x{height} px",
+            "roi": roi,
+            "filter_mode": modo,
+            "mask_source": self.analysis_meta.get("mask_source", "Não informado"),
+            "mask_quality": round(100 * float(self.analysis_meta.get("quality_score", 0.0)), 2),
+            "risk_flags": list(self.analysis_meta.get("risk_flags", [])),
+            "calculation_parameters": {
+                "offset_baseline_fator": angulo_contato.ANGLE_BASELINE_OFFSET_FACTOR,
+                "offset_baseline_min_px": angulo_contato.ANGLE_BASELINE_OFFSET_MIN,
+                "offset_baseline_max_px": angulo_contato.ANGLE_BASELINE_OFFSET_MAX,
+                "janela_ajuste_fator": angulo_contato.ANGLE_WINDOW_HEIGHT_FACTOR,
+                "janela_ajuste_min_px": angulo_contato.ANGLE_WINDOW_HEIGHT_MIN,
+                "janela_ajuste_max_px": angulo_contato.ANGLE_WINDOW_HEIGHT_MAX,
+                "distancia_maxima_contato_px": angulo_contato.ANGLE_CONTACT_CANDIDATE_MAX_DIST,
+                "rmse_referencia_px": angulo_contato.QUALITY_RMSE_REF_PX,
+            },
+        }
 
         # sanity checks
         if bin_img is None:
@@ -721,13 +756,22 @@ class SelectionWindow(ctk.CTk):
 
 
         # Abrir janela de análise passando imagem BGR (vis) e BIN (processamento)
-        new_win = ContactAngleApp(bgr_vis, bin_img, master=self, debug_imgs=debug_imgs)
+        new_win = ContactAngleApp(
+            bgr_vis,
+            bin_img,
+            master=self,
+            debug_imgs=debug_imgs,
+            measurement_metadata=measurement_metadata,
+            measurement_history=self.measurement_history,
+        )
         new_win.lift()
 
 
     def reset_for_new_test(self):
         """Reseta estado completo para permitir nova medição."""
         self.raw_image = None
+        self.image_source_path = ""
+        self.acquisition_mode = "Não informado"
         self.current_roi = None
         self.binary_image = None
         self.binary_preview = None
